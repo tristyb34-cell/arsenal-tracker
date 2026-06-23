@@ -4,10 +4,11 @@
      - Data (snapshot.json): network-first, so you always see the latest news
        when online, and fall back to the last cached copy when offline.
    Bump CACHE when the shell changes to force an update. */
-const CACHE = "arsenal-tracker-static-v1";
+const CACHE = "arsenal-tracker-static-v2";
 const SHELL = [
   "./", "./index.html", "./style.css", "./app.js",
   "./manifest.webmanifest", "./icon-192.png", "./icon-512.png",
+  "./favicon.ico", "./favicon-32.png",
 ];
 
 self.addEventListener("install", (e) => {
