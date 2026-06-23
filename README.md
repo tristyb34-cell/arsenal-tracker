@@ -31,6 +31,29 @@ two-page dashboard at **http://127.0.0.1:5057**.
 - **Matchday skin** — the UI lights up red on matchday (`is_matchday`). A
   deadline-day mode can reuse the same styling (not yet date-triggered).
 
+## Phone install (static PWA on GitHub Pages)
+
+The desktop app stays a localhost Flask app. For the phone, the Mac also publishes
+a **static client-rendered clone** to GitHub Pages, so it installs as a real PWA
+and works anywhere (no tunnel, no always-on requirement beyond the Mac scraping).
+
+```
+arsenal.db  ->  export.py  ->  docs/data/snapshot.json  --git push-->  GitHub Pages  ->  phone PWA
+```
+
+- **export.py** dumps the DB (via the same `db.py` queries) to one
+  `docs/data/snapshot.json` (~712 KB, ~177 KB gzipped).
+- **docs/** is a static SPA (`index.html` + `app.js` + `style.css`) that fetches
+  that JSON and renders all five views client-side, reusing the exact CSS. Hash
+  routing (`#/`, `#/europe`, `#/all`, `#/heat`, `#/saga/<player>`) so refresh
+  never 404s.
+- **docs/sw.js** is network-first for the data (always fresh online, cached
+  fallback offline) and cache-first for the app shell.
+- **run_scrape.sh** runs `export.py` and `git push`es the fresh snapshot after
+  every scrape, so the live site updates 4x/day automatically.
+- Live: **https://tristyb34-cell.github.io/arsenal-tracker/** — open on the phone,
+  Share → Add to Home Screen.
+
 ## How it works
 
 ```

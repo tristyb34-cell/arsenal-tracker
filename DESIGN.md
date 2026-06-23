@@ -49,7 +49,7 @@ All values below are **(real)**, taken verbatim from `:root` in `static/style.cs
 |-------|-------|------|
 | `--text` | `#e7ecf3` | Primary text. |
 | `--muted` | `#8b97ad` | Secondary text: summaries, sources, labels. |
-| `--dim` | `#5e6b82` | Tertiary text: timestamps, counts, placeholders. |
+| `--dim` | `#7a8aa3` | Tertiary text: timestamps, counts, placeholders. Bumped from `#5e6b82` (2026-06-23) to clear AA 4.5:1 on dark; the old value failed for the search placeholder and live-strip labels. |
 
 ### Brand and accents
 | Token | Value | Role |
@@ -205,9 +205,8 @@ This is a news feed; density and scannability are the point.
 
 - **Semantic HTML (real and required):** cards are `<article>`, the top bar is `<header>`, nav is `<nav>`, widgets are `<section>` with a heading, the league widget is a real `<table>`. Card titles are `<h2>`. Keep this. Do not replace semantic elements with bare `<div>`s.
 - **Heading order:** maintain a sane hierarchy per page (one H1 of meaning, section H2s). The saga page uses H1; index uses H2 card titles under a hero. Avoid skipping levels when adding sections.
-- **Contrast:** primary text `--text` on `--bg`/`--bg2` is strong. `--muted` on dark passes for body secondary text; **`--dim` on dark is borderline and should be reserved for non-essential metadata** (timestamps, counts), never for content a user must read. Do not put `--dim` text on `--bg3`.
-  - **(Proposed)** Spot-check `--dim` and `--muted` against AA (4.5:1 for body, 3:1 for large text) and nudge `--dim` lighter if any essential text uses it.
-- **Focus states (gap):** there are no explicit `:focus` / `:focus-visible` styles in the stylesheet today. Interactive elements rely on default UA focus rings, and the global `a { text-decoration: none }` removes a cue.
+- **Contrast:** primary text `--text` on `--bg`/`--bg2` is strong. `--muted` (#8b97ad) passes AA comfortably (~6:1). `--dim` was bumped to `#7a8aa3` (2026-06-23) so it now clears 4.5:1 on dark; still reserve it for metadata, and do not put `--dim` text on `--bg3`. `--grey` (#7c889d) is the thinnest margin at ~4.95:1, so don't darken card backgrounds further.
+- **Focus states:** the static build (`docs/style.css`) now has explicit `:focus-visible` outlines on all interactive elements plus a skip link and `.sr-only` labels (added 2026-06-23). The Flask `static/style.css` still relies on default UA focus rings; backport the same block if the desktop app gets more keyboard use.
   - **(Proposed, recommended)** Add a single visible focus style:
     ```css
     a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible {
