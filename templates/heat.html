@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0a0e16">
+  <title>Rumour Heat · {{ heat_title }}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body data-page="{{ heat_page }}">
+{% import "_macros.html" as ui %}
+{{ ui.topbar(page, last_scrape, insiders, matchday) }}
+
+<div class="layout">
+  <main class="col-main">
+    <a class="back" href="{{ url_for('index') }}">← Back to feed</a>
+
+    <div class="saga-head">
+      <h1>🔥 Rumour Heat</h1>
+      <p>{{ board|length }} player{{ 's' if board|length != 1 else '' }} in the {{ heat_title }} transfer chatter over the last fortnight. Pick anyone to follow their saga.</p>
+    </div>
+
+    <div class="heat-controls">
+      <nav class="heat-scope" aria-label="Heat scope">
+        <a class="chip {{ 'active' if heat_page == 'arsenal' else '' }}"
+           {% if heat_page == 'arsenal' %}aria-current="page"{% endif %}
+           href="{{ url_for('heat', page='arsenal', sort=sort) }}">Arsenal</a>
+        <a class="chip {{ 'active' if heat_page == 'europe' else '' }}"
+           {% if heat_page == 'europe' %}aria-current="page"{% endif %}
+           href="{{ url_for('heat', page='europe', sort=sort) }}">Other Teams</a>
+      </nav>
+      <nav class="heat-sort" aria-label="Sort order">
+        <span class="sort-label" aria-hidden="true">Sort</span>
+        <a class="chip {{ 'active' if sort == 'heat' else '' }}"
+           {% if sort == 'heat' %}aria-current="page"{% endif %}
+           href="{{ url_for('heat', page=heat_page, sort='heat') }}"><span aria-hidden="true">🔥 </span>Heat</a>
+        <a class="chip {{ 'active' if sort == 'latest' else '' }}"
+           {% if sort == 'latest' %}aria-current="page"{% endif %}
+           href="{{ url_for('heat', page=heat_page, sort='latest') }}"><span aria-hidden="true">🕑 </span>Latest</a>
+      </nav>
+    </div>
+
+    {% if not board %}<p class="empty">No transfer chatter tracked yet for this scope.</p>{% endif %}
+
+    {% set top = board[0]['heat'] if board else 1 %}
+    <ol class="heat-list">
+      {% for h in board %}
+      <li>
+        <a class="heat-card" href="{{ url_for('saga', player=h['player']) }}"
+           aria-label="{{ h['player'] }} saga, {{ h['mentions'] }} reports">
+          <div class="hc-rank">{{ loop.index }}</div>
+          <div class="hc-body">
+            <div class="hc-top">
+              <span class="hc-name">{{ h['player'] }}</span>
+              {% if h['is_new'] %}<span class="hc-new">NEW</span>{% endif %}
+              <span class="hc-momentum mo-{{ h['momentum'] }}">
+                {%- if h['momentum'] == 'rising' -%}<span aria-hidden="true">▲ </span>rising
+                {%- elif h['momentum'] == 'cooling' -%}<span aria-hidden="true">▼ </span>cooling
+                {%- else -%}<span aria-hidden="true">▬ </span>steady{%- endif -%}
+              </span>
+              {% if h['club'] %}<span class="hc-club">{{ h['club'] }}</span>{% endif %}
+            </div>
+            <div class="hc-bar" aria-hidden="true">
+              <i style="width: {{ (h['heat'] / top * 100) | round }}%" class="hb-{{ h['best_likelihood'] | slug }}"></i>
+            </div>
+            {% if h['latest_title'] %}
+            <p class="hc-latest">{{ h['latest_title'][:120] }}{% if h['latest_title']|length > 120 %}…{% endif %}</p>
+            {% endif %}
+            <div class="hc-meta">
+              {{ ui.meter(h['best_likelihood']) }}
+              <span class="hc-n">{{ h['mentions'] }} report{{ 's' if h['mentions'] != 1 else '' }}</span>
+              {% if h['latest_source'] %}<span class="source">{{ h['latest_source'] }}</span>{% endif %}
+              {% if h['last_ts'] %}<span class="time">{{ h['last_ts'] | time_ago }}</span>{% endif %}
+            </div>
+          </div>
+        </a>
+      </li>
+      {% endfor %}
+    </ol>
+  </main>
+
+  <aside class="col-rail">
+    <section class="widget">
+      <h2 class="widget-head">How heat works</h2>
+      <p class="rail-note">Heat = how often a player is linked, weighted by how credible the latest reports are. The bar colour tracks the best likelihood reached:</p>
+      <ul class="heat-legend">
+        <li><i class="lg hb-rumour"></i> Rumour</li>
+        <li><i class="lg hb-developing"></i> Developing</li>
+        <li><i class="lg hb-advanced"></i> Advanced</li>
+        <li><i class="lg hb-here-we-go"></i> Here we go</li>
+      </ul>
+      <p class="rail-note">Rising / cooling compares the last 3 days against the 3 before. <b>NEW</b> means first linked in the last 48 hours.</p>
+    </section>
+  </aside>
+</div>
+
+{{ ui.bottomnav(page) }}
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

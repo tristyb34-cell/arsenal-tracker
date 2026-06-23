@@ -1,0 +1,198 @@
+{# ---------- club crest (real logo, monogram fallback) ---------- #}
+{% macro crest(club, cls='') %}
+{% set logo = club | crest_url %}
+{% if logo %}
+<span class="ct-badge has-crest {{ cls }}">
+  <img class="crest-img" src="{{ logo }}" alt="{{ club }}" loading="lazy"
+       onerror="var p=this.parentElement;p.classList.remove('has-crest');p.classList.add('club-{{ club|slug }}');this.remove()">
+  <i class="ct-mono">{{ club | club_code }}</i>
+</span>
+{% else %}
+<span class="ct-badge club-{{ club|slug }} {{ cls }}"><i class="ct-mono">{{ club | club_code }}</i></span>
+{% endif %}
+{% endmacro %}
+
+{# ---------- top bar ---------- #}
+{% macro topbar(page, last_scrape, insiders, matchday) %}
+<header class="topbar {{ 'is-matchday' if matchday else '' }}">
+  <div class="brand">
+    <span class="crest">🔴</span>
+    <span class="brandname">ARSENAL<b>TRACKER</b></span>
+    <nav class="pagenav">
+      <a class="pagelink {{ 'active' if page == 'arsenal' else '' }}" href="{{ url_for('index') }}">Arsenal</a>
+      <a class="pagelink {{ 'active' if page == 'europe' else '' }}" href="{{ url_for('europe') }}">Other Teams</a>
+      <a class="pagelink {{ 'active' if page == 'all' else '' }}" href="{{ url_for('combined') }}">All</a>
+    </nav>
+  </div>
+  <div class="status">
+    <div class="insiders">
+      {% for ins in insiders %}
+        <span class="ins-watch" title="{{ ins['name'] }} last posted">
+          <i class="dot"></i>{{ ins['name'].split(' ')[0] }} {{ ins['last'] | time_ago if ins['last'] else '—' }}
+        </span>
+      {% endfor %}
+    </div>
+    <span class="last-scrape">⟳ {{ last_scrape | time_ago if last_scrape else 'never' }}</span>
+    <form method="post" action="{{ url_for('refresh') }}" class="refresh-form">
+      <input type="hidden" name="back" value="{{ 'europe' if page == 'europe' else ('combined' if page == 'all' else 'index') }}">
+      <button type="submit" class="refresh-btn" title="Fetch all feeds now (~1 min)">↻</button>
+    </form>
+  </div>
+</header>
+{% endmacro %}
+
+{# ---------- live football strip ---------- #}
+{% macro livestrip(snap, matchday) %}
+{% if snap %}
+<div class="livestrip {{ 'matchday' if matchday else '' }}">
+  {% if snap.get('next_match') %}
+    {% set nm = snap['next_match'] %}
+    <div class="ls-block ls-next">
+      <span class="ls-label">{{ 'TODAY' if matchday else 'NEXT' }}</span>
+      <span class="ls-main">{{ nm['home_short'] or nm['home'] }} <i>v</i> {{ nm['away_short'] or nm['away'] }}</span>
+      <span class="ls-sub" data-countdown="{{ nm['kickoff'] }}">{{ nm['kickoff'][:16] | replace('T',' ') }}</span>
+    </div>
+  {% else %}
+    <div class="ls-block ls-next">
+      <span class="ls-label">NEXT</span>
+      <span class="ls-main">Fixtures TBA</span>
+      <span class="ls-sub">off-season</span>
+    </div>
+  {% endif %}
+  {% if snap.get('last_result') %}
+    {% set lr = snap['last_result'] %}
+    <div class="ls-block">
+      <span class="ls-label">LAST</span>
+      <span class="ls-main">{{ lr['home_short'] or lr['home'] }} {{ lr['home_goals'] }}–{{ lr['away_goals'] }} {{ lr['away_short'] or lr['away'] }}</span>
+    </div>
+  {% endif %}
+  {% if snap.get('form') %}
+    <div class="ls-block">
+      <span class="ls-label">FORM</span>
+      <span class="ls-form">
+        {% for r in snap['form'] %}<i class="f f-{{ r|lower }}">{{ r }}</i>{% endfor %}
+      </span>
+    </div>
+  {% endif %}
+  {% if snap.get('arsenal_row') %}
+    {% set ar = snap['arsenal_row'] %}
+    <div class="ls-block">
+      <span class="ls-label">TABLE</span>
+      <span class="ls-main">#{{ ar['rank'] }} · {{ ar['points'] }}pts</span>
+    </div>
+  {% endif %}
+</div>
+{% endif %}
+{% endmacro %}
+
+{# ---------- segmented likelihood meter ---------- #}
+{% macro meter(label) %}
+{% set idx = label | rung_index %}
+<span class="meter lvl-{{ idx }}" title="Likelihood: {{ label }}">
+  {% for i in range(rungs|length) %}<i class="seg {{ 'on s'+i|string if i <= idx else '' }}"></i>{% endfor %}
+  <em>{{ label }}</em>
+</span>
+{% endmacro %}
+
+{# ---------- story card ---------- #}
+{% macro card(it, show_clubs=False) %}
+<article class="card cat-{{ it['category'] | slug }} {{ 'insider-glow' if it['has_insider'] else '' }}"
+         data-hwg="{{ '1' if it['best_likelihood'] == 'Here we go' else '0' }}">
+  <div class="card-meta">
+    <span class="cat-pill cat-{{ it['category'] | slug }}">{{ it['category'] }}</span>
+    {% if it['best_likelihood'] %}{{ meter(it['best_likelihood']) }}{% endif %}
+    {% if it['has_insider'] %}<span class="insider">⚡ insider</span>{% endif %}
+    {% if it['source_count'] and it['source_count'] > 1 %}
+      <span class="consensus" title="{{ it['sources_list'] | join(', ') }}">📰 {{ it['source_count'] }} sources</span>
+    {% endif %}
+    <span class="time">{{ (it['published_at'] or it['first_seen']) | time_ago }}</span>
+  </div>
+  <h2 class="card-title"><a href="{{ it['url'] }}" target="_blank" rel="noopener">{{ it['title'] }}</a></h2>
+  {% if it['summary'] %}<p class="card-summary">{{ it['summary'][:200] }}{% if it['summary']|length > 200 %}…{% endif %}</p>{% endif %}
+  <div class="card-foot">
+    <span class="source">{{ it['source'] }}</span>
+    {% if show_clubs and it['clubs'] %}<span class="clubs">{{ it['clubs'] }}</span>{% endif %}
+    {% if it['player'] %}<a class="player-tag" href="{{ url_for('saga', player=it['player']) }}">📈 {{ it['player'] }}</a>{% endif %}
+  </div>
+</article>
+{% endmacro %}
+
+{# ---------- rail widgets ---------- #}
+{% macro heat_widget(heat, scope='arsenal') %}
+{% if heat %}
+<section class="widget">
+  <h3 class="widget-head"><a class="widget-link" href="{{ url_for('heat', page=scope) }}">🔥 Rumour Heat <span class="widget-more" aria-hidden="true">›</span></a></h3>
+  {% set top = heat[0]['heat'] if heat else 1 %}
+  {% for h in heat %}
+  <a class="heat-row" href="{{ url_for('saga', player=h['player']) }}">
+    <span class="heat-name">{{ h['player'] }}</span>
+    <span class="heat-bar"><i style="width: {{ (h['heat'] / top * 100) | round }}%" class="hb-{{ h['best_likelihood'] | slug }}"></i></span>
+    <span class="heat-n">{{ h['mentions'] }}</span>
+  </a>
+  {% endfor %}
+</section>
+{% endif %}
+{% endmacro %}
+
+{% macro deals_widget(deals) %}
+{% if deals %}
+<section class="widget">
+  <h3 class="widget-head">✅ Done Deals</h3>
+  {% for d in deals %}
+  <a class="deal-row" href="{{ d['url'] }}" target="_blank" rel="noopener">
+    <b>{{ d['player'] }}</b><span>{{ d['title'][:64] }}</span>
+  </a>
+  {% endfor %}
+</section>
+{% endif %}
+{% endmacro %}
+
+{% macro injuries_widget(injuries) %}
+{% if injuries %}
+<section class="widget">
+  <h3 class="widget-head">🩹 Injury Room</h3>
+  {% for i in injuries %}
+  <a class="inj-row" href="{{ i['url'] }}" target="_blank" rel="noopener">
+    {% if i['player'] %}<b>{{ i['player'] }}</b>{% endif %}
+    <span>{{ i['title'][:70] }}</span>
+  </a>
+  {% endfor %}
+</section>
+{% endif %}
+{% endmacro %}
+
+{% macro table_widget(snap) %}
+{% if snap and snap.get('table') %}
+<section class="widget">
+  <h3 class="widget-head">🏆 Premier League</h3>
+  <table class="mini-table">
+    {% for r in snap['table'][:6] %}
+    <tr class="{{ 'is-arsenal' if r['team'] == 'Arsenal' else '' }}">
+      <td class="rk">{{ r['rank'] }}</td><td class="tm">{{ r['team'] }}</td>
+      <td class="pl">{{ r['played'] }}</td><td class="pts">{{ r['points'] }}</td>
+    </tr>
+    {% endfor %}
+    {% set ar = snap.get('arsenal_row') %}
+    {% if ar and ar['rank'] and ar['rank'] > 6 %}
+    <tr class="is-arsenal">
+      <td class="rk">{{ ar['rank'] }}</td><td class="tm">Arsenal</td>
+      <td class="pl">{{ ar['played'] }}</td><td class="pts">{{ ar['points'] }}</td>
+    </tr>
+    {% endif %}
+  </table>
+</section>
+{% endif %}
+{% endmacro %}
+
+{# ---------- mobile bottom nav ---------- #}
+{% macro bottomnav(page) %}
+<nav class="bottomnav">
+  <a href="{{ url_for('index') }}" class="{{ 'active' if page == 'arsenal' else '' }}"><span>🔴</span>Arsenal</a>
+  <a href="{{ url_for('europe') }}" class="{{ 'active' if page == 'europe' else '' }}"><span>🌍</span>Others</a>
+  <a href="{{ url_for('combined') }}" class="{{ 'active' if page == 'all' else '' }}"><span>📰</span>All</a>
+  <form method="post" action="{{ url_for('refresh') }}" class="nav-refresh">
+    <input type="hidden" name="back" value="{{ 'europe' if page == 'europe' else ('combined' if page == 'all' else 'index') }}">
+    <button type="submit"><span>↻</span>Refresh</button>
+  </form>
+</nav>
+{% endmacro %}

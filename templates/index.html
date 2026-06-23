@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0a0e16">
+  <link rel="manifest" href="{{ url_for('manifest') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='icon-192.png') }}">
+  <title>Arsenal Tracker</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body data-page="arsenal">
+{% import "_macros.html" as ui %}
+{{ ui.topbar(page, last_scrape, insiders, matchday) }}
+{{ ui.livestrip(snap, matchday) }}
+
+<div class="layout">
+  <main class="col-main">
+
+    {% if brief %}
+    <section class="brief" id="brief">
+      <div class="brief-head">📋 Morning Brief <span>{{ brief['generated_at'] | time_ago }}</span></div>
+      <p>{{ brief['text'] }}</p>
+    </section>
+    {% endif %}
+
+    {% if hero %}
+    <a class="hero" href="{{ hero['url'] }}" target="_blank" rel="noopener"
+       data-hwg="{{ '1' if hero['best_likelihood'] == 'Here we go' else '0' }}">
+      <span class="hero-tag">TOP STORY</span>
+      <div class="hero-meta">
+        <span class="cat-pill cat-{{ hero['category'] | slug }}">{{ hero['category'] }}</span>
+        {% if hero['best_likelihood'] %}{{ ui.meter(hero['best_likelihood']) }}{% endif %}
+        {% if hero['has_insider'] %}<span class="insider">⚡ insider</span>{% endif %}
+        {% if hero['source_count'] > 1 %}<span class="consensus">📰 {{ hero['source_count'] }} sources</span>{% endif %}
+      </div>
+      <h1 class="hero-title">{{ hero['title'] }}</h1>
+      <span class="hero-foot">{{ hero['source'] }} · {{ (hero['published_at'] or hero['first_seen']) | time_ago }}</span>
+    </a>
+    {% endif %}
+
+    <nav class="tabs">
+      {% for name, count in tabs %}
+        <a class="tab {{ 'active' if name == active_category else '' }}"
+           href="{{ url_for('index', category=name, source=active_source, q=search, rung=active_rung) }}">
+          {{ name }} <span class="badge">{{ count }}</span>
+        </a>
+      {% endfor %}
+      <a class="tab rung-toggle {{ 'active' if active_rung else '' }}"
+         href="{{ url_for('index', category=active_category, source=active_source, q=search, rung='' if active_rung else 'Advanced') }}">
+         🎯 Advanced+
+      </a>
+    </nav>
+
+    <div class="filters">
+      <form method="get" action="{{ url_for('index') }}" class="filter-form">
+        <input type="hidden" name="category" value="{{ active_category }}">
+        <input type="hidden" name="rung" value="{{ active_rung }}">
+        <input class="search" type="text" name="q" value="{{ search }}" placeholder="Search Arsenal…">
+        <select name="source" onchange="this.form.submit()">
+          <option value="All">All sources</option>
+          {% for s in sources %}<option value="{{ s }}" {{ 'selected' if s == active_source else '' }}>{{ s }}</option>{% endfor %}
+        </select>
+        <button type="submit" class="go">Go</button>
+        {% if search or active_source != 'All' or active_rung %}
+          <a class="clear" href="{{ url_for('index', category=active_category) }}">Clear</a>
+        {% endif %}
+      </form>
+    </div>
+
+    <section class="feed">
+      {% if not clusters %}<p class="empty">No stories match. Try clearing filters or hit Refresh.</p>{% endif %}
+      {% for it in clusters %}{{ ui.card(it) }}{% endfor %}
+    </section>
+  </main>
+
+  <aside class="col-rail">
+    {{ ui.table_widget(snap) }}
+    {{ ui.heat_widget(heat) }}
+    {{ ui.deals_widget(deals) }}
+    {{ ui.injuries_widget(injuries) }}
+  </aside>
+</div>
+
+{{ ui.bottomnav(page) }}
+<canvas id="confetti"></canvas>
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

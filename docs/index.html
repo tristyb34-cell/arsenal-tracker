@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0a0e16">
+  <title>Arsenal Tracker</title>
+  <meta name="description" content="Personal Arsenal news, transfers, injuries and the European transfer desk.">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon-192.png">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <header class="topbar" id="topbar">
+    <div class="brand">
+      <span class="crest" aria-hidden="true">🔴</span>
+      <span class="brandname">ARSENAL<b>TRACKER</b></span>
+      <nav class="pagenav" aria-label="Sections">
+        <a class="pagelink" href="#/" data-page="arsenal">Arsenal</a>
+        <a class="pagelink" href="#/europe" data-page="europe">Other Teams</a>
+        <a class="pagelink" href="#/all" data-page="all">All</a>
+      </nav>
+    </div>
+    <div class="status">
+      <div class="insiders" id="insiders" aria-label="Insider watch"></div>
+      <span class="last-scrape" id="last-scrape" title="Last data update"></span>
+    </div>
+  </header>
+
+  <div class="livestrip-mount" id="livestrip" aria-label="Live football"></div>
+
+  <main class="layout" id="main">
+    <div class="col-main">
+      <div id="search-status" class="sr-only" aria-live="polite" aria-atomic="true"></div>
+      <div id="view" tabindex="-1"></div>
+    </div>
+    <aside class="col-rail" id="rail" aria-label="Sidebar"></aside>
+  </main>
+
+  <nav class="bottomnav" aria-label="Mobile navigation">
+    <a href="#/" data-page="arsenal"><span aria-hidden="true">🔴</span>Arsenal</a>
+    <a href="#/europe" data-page="europe"><span aria-hidden="true">🌍</span>Others</a>
+    <a href="#/all" data-page="all"><span aria-hidden="true">📰</span>All</a>
+    <a href="#/heat" data-page="heat"><span aria-hidden="true">🔥</span>Heat</a>
+  </nav>
+
+  <canvas id="confetti" aria-hidden="true"></canvas>
+
+  <script src="app.js"></script>
+</body>
+</html>

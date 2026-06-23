@@ -1,0 +1,11 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# Local data + logs (regenerated on the Mac; the published artifact is docs/data/snapshot.json)
+arsenal.db
+logs/
+
+# OS noise
+.DS_Store

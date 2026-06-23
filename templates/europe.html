@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0a0e16">
+  <link rel="manifest" href="{{ url_for('manifest') }}">
+  <title>Arsenal Tracker · Europe</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body data-page="europe">
+{% import "_macros.html" as ui %}
+{{ ui.topbar(page, last_scrape, insiders, matchday) }}
+{{ ui.livestrip(snap, matchday) }}
+
+<div class="layout">
+  <main class="col-main">
+    <div class="europe-head">
+      <h2>Transfer Desk · Europe</h2>
+      <p>Rival and European transfer news only. Each story carries a likelihood rung from rumour to here-we-go.</p>
+    </div>
+
+    <div class="crestwall">
+      <a class="crest-tile {{ 'active' if active_club == 'All' else '' }}" href="{{ url_for('europe') }}">
+        <span class="ct-badge ct-all">ALL</span><span class="ct-name">All clubs</span>
+      </a>
+      {% for c, n in club_chips %}
+      <a class="crest-tile {{ 'active' if active_club == c else '' }}" href="{{ url_for('europe', club=c) }}">
+        {{ ui.crest(c) }}
+        <span class="ct-name">{{ c }}</span><span class="ct-n">{{ n }}</span>
+      </a>
+      {% endfor %}
+    </div>
+
+    <div class="filters">
+      <form method="get" action="{{ url_for('europe') }}" class="filter-form">
+        <input type="hidden" name="club" value="{{ active_club }}">
+        <input class="search" type="text" name="q" value="{{ search }}" placeholder="Search transfers…">
+        <a class="tab rung-toggle {{ 'active' if active_rung else '' }}"
+           href="{{ url_for('europe', club=active_club, q=search, rung='' if active_rung else 'Advanced') }}">🎯 Advanced+</a>
+        <button type="submit" class="go">Go</button>
+        {% if search or active_club != 'All' or active_rung %}<a class="clear" href="{{ url_for('europe') }}">Clear</a>{% endif %}
+      </form>
+    </div>
+
+    <section class="feed">
+      {% if flat %}
+        {% if not flat_items %}<p class="empty">No transfers match. Try clearing filters.</p>{% endif %}
+        {% for it in flat_items %}{{ ui.card(it, show_clubs=True) }}{% endfor %}
+      {% else %}
+        {% if not groups %}<p class="empty">No European transfer stories yet. Hit Refresh.</p>{% endif %}
+        {% for club, items in groups %}
+        <div class="club-section" id="club-{{ club | slug }}">
+          <h3 class="club-head">{{ ui.crest(club, 'small') }}{{ club }} <span class="count">{{ items|length }}</span></h3>
+          {% for it in items %}{{ ui.card(it, show_clubs=True) }}{% endfor %}
+        </div>
+        {% endfor %}
+      {% endif %}
+    </section>
+  </main>
+
+  <aside class="col-rail">
+    {{ ui.heat_widget(heat, scope='europe') }}
+    {{ ui.deals_widget(deals) }}
+  </aside>
+</div>
+
+{{ ui.bottomnav(page) }}
+<canvas id="confetti"></canvas>
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

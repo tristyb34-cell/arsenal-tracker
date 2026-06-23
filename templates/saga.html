@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0a0e16">
+  <title>{{ player }} · Saga</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body data-page="arsenal">
+{% import "_macros.html" as ui %}
+{{ ui.topbar(page, last_scrape, insiders, matchday) }}
+
+<div class="layout">
+  <main class="col-main">
+    <a class="back" href="{{ url_for('index') }}">← Back to feed</a>
+    <div class="saga-head">
+      <h1>📈 {{ player }}</h1>
+      <p>{{ rows|length }} report{{ 's' if rows|length != 1 else '' }} tracked. Watch the likelihood climb (or stall) over time.</p>
+    </div>
+
+    {% if not rows %}<p class="empty">No saga data for this player.</p>{% endif %}
+
+    <div class="timeline">
+      {% for r in rows %}
+      <div class="tl-row rung-{{ r['likelihood'] | rung_index }}">
+        <div class="tl-dot"></div>
+        <div class="tl-body">
+          <div class="tl-meta">
+            {{ ui.meter(r['likelihood']) }}
+            {% if r['credibility'] == 'insider' %}<span class="insider">⚡ insider</span>{% endif %}
+            <span class="time">{{ r['ts'] | time_ago }}</span>
+          </div>
+          <a class="tl-title" href="{{ r['url'] }}" target="_blank" rel="noopener">{{ r['title'] }}</a>
+          <span class="source">{{ r['source'] }}</span>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </main>
+
+  <aside class="col-rail">
+    <section class="widget">
+      <h3 class="widget-head">📈 Other Sagas</h3>
+      {% for p in players[:14] %}
+      <a class="deal-row" href="{{ url_for('saga', player=p) }}"><b>{{ p }}</b></a>
+      {% endfor %}
+    </section>
+  </aside>
+</div>
+
+{{ ui.bottomnav(page) }}
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
