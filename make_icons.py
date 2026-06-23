@@ -44,16 +44,20 @@ def _square_on(crest, size, bg, scale):
 def main():
     crest = _fetch_crest()
 
-    # home-screen / install icons: crest on the dark app background
-    _square_on(crest, 512, BG, SAFE).save("docs/icon-512.png")
-    _square_on(crest, 192, BG, SAFE).save("docs/icon-192.png")
+    # home-screen / install icons: crest on the dark app background.
+    # NOTE: filenames carry a version suffix on purpose. iOS/Safari and the
+    # service worker cache home-screen icons hard; re-adding reuses the old URL.
+    # Bumping the filename is the only reliable cache-bust. Bump ICON_VER when
+    # the crest changes and update the references in index.html + manifest + sw.js.
+    _square_on(crest, 512, BG, SAFE).save("docs/icon-512-v2.png")
+    _square_on(crest, 192, BG, SAFE).save("docs/icon-192-v2.png")
 
     # favicon: crest on transparent, a touch more bleed so it reads at tab size
     fav = _square_on(crest, 64, (0, 0, 0, 0), 0.92)
-    fav.save("docs/favicon-32.png")
+    fav.save("docs/favicon-32-v2.png")
     fav.save("docs/favicon.ico", sizes=[(16, 16), (32, 32), (48, 48)])
 
-    print("Wrote docs/icon-512.png, icon-192.png, favicon.ico, favicon-32.png")
+    print("Wrote docs/icon-512-v2.png, icon-192-v2.png, favicon.ico, favicon-32-v2.png")
 
 
 if __name__ == "__main__":
