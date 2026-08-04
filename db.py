@@ -227,9 +227,31 @@ def insider_last_post(conn, source):
 def recent_cluster_rows(conn, since_iso):
     """Rows used to attach new items to an existing story cluster."""
     return conn.execute(
-        "SELECT title, title_key, cluster_id, source FROM items WHERE first_seen >= ?",
+        "SELECT title, title_key, cluster_id, source, player "
+        "FROM items WHERE first_seen >= ?",
         (since_iso,),
     ).fetchall()
+
+
+def arsenal_orbit_players(conn, days=21):
+    """Players Arsenal are demonstrably linked with right now.
+
+    Derived from transfer headlines that explicitly name the club, so it learns
+    each window's targets instead of relying on a hand-maintained list. Lets a
+    headline like "Bruno Guimaraes deal done" reach the Arsenal tab even though
+    it never says "Arsenal", without opening the tab to every player alive."""
+    cutoff = _days_ago(days)
+    rows = conn.execute(
+        """SELECT player, title FROM items
+           WHERE category = 'Transfers' AND player IS NOT NULL AND player <> ''
+                 AND COALESCE(published_at, first_seen) >= ?""",
+        (cutoff,),
+    ).fetchall()
+    counts = {}
+    for r in rows:
+        if config.arsenal_signal(r["title"]) == "strong":
+            counts[r["player"]] = counts.get(r["player"], 0) + 1
+    return {p for p, n in counts.items() if n >= config.ORBIT_MIN_MENTIONS}
 
 
 def _rung_rank(label):
@@ -307,9 +329,14 @@ def query_clusters(conn, page="arsenal", category=None, source=None, search=None
         if rr > c["best_rung"]:
             c["best_rung"] = rr
             c["best_likelihood"] = r["likelihood"]
-        # representative = highest credibility, then most recent (rows already desc)
+        # Representative = furthest-progressed rung, then credibility, then most
+        # recent (rows already desc). The card displays the cluster's best rung,
+        # so picking on credibility alone could stamp HERE WE GO on a headline
+        # that asks "Could this really happen?" from the more credible outlet.
         cred_order = {"insider": 3, "high": 2, "medium": 1, "low": 0}
-        if cred_order.get(r["credibility"], 0) > cred_order.get(c["rep"]["credibility"], 0):
+        rep_key = (_rung_rank(c["rep"]["likelihood"]),
+                   cred_order.get(c["rep"]["credibility"], 0))
+        if (rr, cred_order.get(r["credibility"], 0)) > rep_key:
             c["rep"] = r
 
     out = []

@@ -73,10 +73,71 @@ feeds (RSS / X mirrors)  ->  scrape.py  ->  arsenal.db (SQLite)  ->  app.py (Fla
 ## Likelihood ladder (transfer items)
 
 Low → high: **Rumour → Developing → Advanced → Here we go**. An item's rung is the
-highest tier whose keywords appear in the headline. Insider sources (Fabrizio
+highest tier whose patterns match the headline. Insider sources (Fabrizio
 Romano, David Ornstein) boost the rung one notch (capped at Advanced unless the
-language itself already says "here we go"). Tune the keyword lists in
-`config.py` (`LIKELIHOOD_KEYWORDS`).
+language itself already says "here we go"). Tune the patterns in `config.py`
+(`LIKELIHOOD_PATTERNS`).
+
+Matching is **word-boundary regex with slack for intervening words** (`GAP`), not
+substring matching. Real headlines interleave words ("agree £150k deal"), inflect
+verbs ("complete" vs "completed") and wrap claims in quotes ('deal "done"'). The
+original substring engine matched none of those, so 62% of all transfer items
+fell through to the Rumour default and the ladder was decorative. Guards:
+
+- a "done" claim wrapped in future language ("set to complete", "nears
+  completion", a question mark) is capped at Advanced,
+- **except** when the headline literally says "here we go" (Romano's sign-off),
+- a bid that is only *planned* or *prepared* is Developing, not Advanced.
+
+`test_likelihood.py` holds hand-labelled real headlines for all of this. Run it
+after touching the patterns: `./venv/bin/python -m pytest test_likelihood.py -q`.
+
+## What earns the Arsenal tab
+
+The Arsenal tab is Arsenal news only, and the signal is read from the **title**,
+never the summary. A BBC gossip round-up names ten clubs in its summary, which is
+how "Man City brace for Rodri bid" used to appear on the Arsenal tab.
+
+A **transfer** reaches the Arsenal tab when the headline:
+
+1. names the club (`ARSENAL_STRONG_TERMS`), or
+2. names one of our players (`ARSENAL_SQUAD_TERMS`), or
+3. names a player in the **orbit** and no other club.
+
+The orbit (`db.arsenal_orbit_players`) is derived from transfer headlines that
+explicitly name Arsenal, so it learns each window's targets instead of relying on
+a hand-maintained list. That is what lets "Bruno Guimaraes deal done" through
+without opening the tab to every player alive. The "no other club" guard is what
+keeps "Atletico CEO on Alvarez and Barcelona" out: an orbit player, but not an
+Arsenal story. `OTHER_CLUB_TERMS` exists purely for that veto, because only 19
+clubs are tracked for display and "Fenerbahce ready huge Rashford offer" would
+otherwise look club-less.
+
+Ambiguous bare surnames used to be in the Arsenal term list ("white", "rice",
+"timber", "jesus", "gabriel"), which tagged "Jesus Navas retires" and "Timber
+merchant strikes gold" as Arsenal. Those now require the full name.
+
+**Women's football is excluded entirely**, dropped at ingest rather than hidden.
+Headlines often never say "women", so `WOMENS_CLUB_TERMS` (NWSL/WSL clubs) and
+`WOMENS_PLAYER_TERMS` do the work: "Jenna Nighswonger to join Bay FC" has no
+other tell.
+
+## Story clustering
+
+Cross-source variants of one story share a `cluster_id`, and the card shows
+"N sources". Scoring is word **overlap** on *story* words: the player name and
+every club name are stripped first, because they are constant across a saga.
+
+Getting this wrong is actively misleading, not just untidy. The card displays the
+cluster's highest rung, so when clustering merged an entire Vinicius saga into
+one cluster, a card reading "Could Vinicius Jr really be heading to Arsenal?"
+displayed **HERE WE GO**. Thresholds live in `config.py`
+(`CLUSTER_THRESHOLD`, `CLUSTER_THRESHOLD_NO_PLAYER`, `CLUSTER_MIN_SHARED`).
+Prefer under-clustering: a cluster of one is honest, a false merge is not.
+
+Player names are canonicalised on write (`config.canonical_player`), so
+"Vinicius Jr" and "Vinícius Júnior" are one player on the heat board and saga
+pages rather than three.
 
 ## Tracked clubs (Europe page)
 
@@ -107,7 +168,7 @@ Sky Transfer Centre, Football Italia (Serie A), plus the two insiders above.
 
 Two launchd agents (in `~/Library/LaunchAgents/`):
 
-- `com.arsenal.tracker.scrape` — runs `run_scrape.sh` at 08:00, 11:00, 14:00, 17:00
+- `com.arsenal.tracker.scrape` — runs `run_scrape.sh` every 30 minutes (`StartInterval`)
 - `com.arsenal.tracker.app` — keeps the dashboard alive (RunAtLoad + KeepAlive)
 
 ```bash
@@ -140,6 +201,10 @@ launchctl list | grep arsenal
 
 - **Add/remove a source:** edit `SOURCES` in `config.py` (set `arsenal_specific`
   False for general feeds so the relevance filter applies).
-- **Adjust categories:** edit `CATEGORIES` keyword lists in `config.py`.
-- **Change schedule:** edit the `StartCalendarInterval` block in the scrape plist.
+- **Adjust categories:** edit `CATEGORIES` keyword lists in `config.py`. They are
+  matched on word boundaries and title hits count double (`TITLE_WEIGHT`).
+- **Change schedule:** edit `StartInterval` in the scrape plist. It was four fixed
+  times (08/11/14/17), which left a 15-hour blackout from 17:00 to 08:00 and an
+  average 5.6-hour lag from publication to appearing. `StartInterval` also fires
+  on wake, so a sleeping Mac catches up immediately.
 - **Change port:** edit `PORT` in `config.py`.

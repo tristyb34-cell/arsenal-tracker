@@ -67,5 +67,6 @@ def extract_players(items):
     result = _claude_players_batch(titles)
     for local_i, global_i in enumerate(transfer_idx):
         if local_i in result:
-            items[global_i]["player"] = result[local_i]
+            # canonicalise so "Vinicius Jr" and "Vinicius Júnior" are one player
+            items[global_i]["player"] = config.canonical_player(result[local_i])
     return items

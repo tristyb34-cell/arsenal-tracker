@@ -19,25 +19,32 @@ import config
 _WORD_RE = re.compile(r"[a-z£€]+|[a-z]+-[a-z]+", re.I)
 
 
-def _score(text: str):
-    """Return {category: hit_count} for the keyword rules."""
-    t = (text or "").lower()
+TITLE_WEIGHT = 2        # the headline is the subject; the summary is context
+
+
+def _score(text: str, title: str = None):
+    """Return {category: hit_count} for the keyword rules.
+
+    Hits in the title count double. A BBC gossip round-up carries ten clubs and
+    half a dozen match words in its summary, which used to drown out what the
+    headline was actually about."""
+    body = (text or "")
+    head = (title or "")
     scores = {}
-    for cat, keywords in config.CATEGORIES.items():
-        hits = 0
-        for kw in keywords:
-            if kw in t:
-                hits += 1
+    for cat, patterns in config.CATEGORY_PATTERNS.items():
+        hits = sum(1 for p in patterns if p.search(body))
+        if head:
+            hits += TITLE_WEIGHT * sum(1 for p in patterns if p.search(head))
         scores[cat] = hits
     return scores
 
 
-def rules_category(text: str):
+def rules_category(text: str, title: str = None):
     """Return (category, confident) using keyword rules.
 
     confident=False means the result is ambiguous and should go to claude.
     """
-    scores = _score(text)
+    scores = _score(text, title)
     ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
     top_cat, top_score = ranked[0]
     second_score = ranked[1][1] if len(ranked) > 1 else 0
@@ -110,7 +117,7 @@ def categorise_items(items):
     """
     ambiguous_idx = []
     for i, it in enumerate(items):
-        cat, confident = rules_category(it["text"])
+        cat, confident = rules_category(it["text"], it.get("title"))
         it["category"] = cat
         it["category_by"] = "rules"
         if not confident:

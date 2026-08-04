@@ -162,13 +162,28 @@ def _is_matchday(nxt, now):
     return ko.date() == now.date()
 
 
-def refresh(conn=None):
-    """Build the snapshot and cache it. Safe to call every scrape."""
+def refresh(conn=None, max_age_minutes=None):
+    """Build the snapshot and cache it. Safe to call every scrape.
+
+    The scraper now runs every 30 minutes rather than four times a day, and each
+    build makes several sliced ESPN requests. Fixtures and league tables do not
+    change that fast, so skip the rebuild while the cache is still warm. Pass
+    max_age_minutes=0 to force a refresh."""
     own = conn is None
     if own:
         ctx = db.get_conn()
         conn = ctx.__enter__()
     try:
+        if max_age_minutes:
+            cached = get_cached(conn)
+            updated = (cached or {}).get("_updated_at")
+            if updated:
+                try:
+                    age = datetime.now(timezone.utc) - datetime.fromisoformat(updated)
+                    if age < timedelta(minutes=max_age_minutes):
+                        return cached
+                except ValueError:
+                    pass
         snap = build_snapshot()
         db.kv_set(conn, "football", json.dumps(snap),
                   datetime.now(timezone.utc).isoformat())

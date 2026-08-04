@@ -5,6 +5,7 @@ __pycache__/
 
 # Local data + logs (regenerated on the Mac; the published artifact is docs/data/snapshot.json)
 arsenal.db
+arsenal.db.*
 logs/
 
 # OS noise
