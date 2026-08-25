@@ -22,8 +22,8 @@ FINISHED = {"STATUS_FULL_TIME", "STATUS_FINAL_AET", "STATUS_FINAL_PEN", "STATUS_
 
 
 def _get(url, params=None):
-    r = requests.get(url, params=params or {},
-                     headers={"User-Agent": config.USER_AGENT}, timeout=15)
+    # ESPN 403s on browser-spoofed UAs (started 2026-08-04). Plain requests UA works.
+    r = requests.get(url, params=params or {}, timeout=15)
     r.raise_for_status()
     return r.json()
 
