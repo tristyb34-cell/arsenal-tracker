@@ -490,6 +490,47 @@ def injury_board(conn, limit=12, days=30):
     ).fetchall()
 
 
+# Availability language, as opposed to transfer noise. "Back in training" and
+# "named in the squad" are the two Tristan asked for by name.
+TEAM_NEWS_TERMS = (
+    "training", "squad", "available", "unavailable", "back in", "return",
+    "returns", "fit ", "fitness", "doubt", "ruled out", "sidelined", "injury",
+    "injured", "suspended", "suspension", "ban", "starting", "line-up",
+    "lineup", "xi", "rested", "recovery", "setback", "scan", "knock",
+    "press conference", "team news",
+)
+
+
+def team_news(conn, days=10, limit=10):
+    """Arsenal availability stories in the build-up to the next match.
+
+    Injuries-category items always qualify. Anything else has to actually use
+    availability language, otherwise the section fills with transfer rumours."""
+    cutoff = _days_ago(days)
+    rows = conn.execute(
+        """SELECT title, url, source, player, category,
+                  COALESCE(published_at, first_seen) ts
+           FROM items
+           WHERE page = 'arsenal' AND COALESCE(published_at, first_seen) >= ?
+           ORDER BY ts DESC LIMIT 400""",
+        (cutoff,),
+    ).fetchall()
+    out, seen = [], set()
+    for r in rows:
+        title = (r["title"] or "")
+        low = title.lower()
+        if r["category"] != "Injuries" and not any(t in low for t in TEAM_NEWS_TERMS):
+            continue
+        key = low[:60]
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(r)
+        if len(out) >= limit:
+            break
+    return out
+
+
 def done_deals(conn, page="arsenal", limit=12, days=45):
     cutoff = _days_ago(days)
     page_clause = "" if page in (None, "all") else "page = ? AND "

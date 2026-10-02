@@ -17,6 +17,7 @@ import brief
 import config
 import db
 import fixtures
+import matchcentre
 
 OUT_DIR = os.path.join(config.BASE_DIR, "docs", "data")
 OUT_FILE = os.path.join(OUT_DIR, "snapshot.json")
@@ -77,6 +78,24 @@ def _sagas(conn):
     return sagas
 
 
+def _matches(conn):
+    """Match centre payloads for the games the phone might actually open.
+
+    ESPN 403s any browser user agent, so the PWA cannot fetch this itself. The
+    Mac fetches it with the plain requests UA that still works and bakes it in.
+    Only the live, next and last matches, to keep the snapshot small."""
+    snap = fixtures.get_cached(conn) or {}
+    out = {}
+    for key in ("live_match", "next_match", "last_result"):
+        ev = snap.get(key)
+        if not ev:
+            continue
+        payload = matchcentre.get(conn, ev)
+        if payload:
+            out[str(ev["id"])] = payload
+    return out
+
+
 def build(conn):
     deal_keys = ("title", "url", "source", "player", "clubs")
     inj_keys = ("title", "url", "source", "player")
@@ -117,6 +136,8 @@ def build(conn):
             "europe": _rows(db.done_deals(conn, page="europe"), deal_keys),
         },
         "injuries": _rows(db.injury_board(conn), inj_keys),
+        "team_news": _rows(db.team_news(conn), ("title", "url", "source", "player", "ts")),
+        "matches": _matches(conn),
         "sagas": _sagas(conn),
     }
     return snap

@@ -4,7 +4,7 @@
      - Data (snapshot.json): network-first, so you always see the latest news
        when online, and fall back to the last cached copy when offline.
    Bump CACHE when the shell changes to force an update. */
-const CACHE = "arsenal-tracker-static-v3";
+const CACHE = "arsenal-tracker-static-v10";
 const SHELL = [
   "./", "./index.html", "./style.css", "./app.js",
   "./manifest.webmanifest", "./icon-192-v2.png", "./icon-512-v2.png",
@@ -27,6 +27,11 @@ self.addEventListener("activate", (e) => {
 self.addEventListener("fetch", (e) => {
   if (e.request.method !== "GET") return;
   const url = new URL(e.request.url);
+
+  // Never intercept cross-origin requests. The match centre fetches lineups and
+  // live scores straight from site.api.espn.com, and routing those through the
+  // cache-first shell handler left them pending forever.
+  if (url.origin !== self.location.origin) return;
 
   // network-first for the data snapshot (always try fresh, fall back to cache)
   if (url.pathname.endsWith("/data/snapshot.json") || url.pathname.endsWith("snapshot.json")) {

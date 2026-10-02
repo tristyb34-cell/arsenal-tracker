@@ -62,6 +62,14 @@ All values below are **(real)**, taken verbatim from `:root` in `static/style.cs
 | `--amber` | `#e08a1e` | Mid-tier likelihood, advanced-rumour heat, the rung toggle. |
 | `--grey` | `#7c889d` | Neutral / lowest likelihood rung, draw badge. |
 
+### Pitch and tint tokens
+`--pitch-a` / `--pitch-b` (turf gradient), `--pitch-edge`, `--pitch-line`, `--pitch-stripe`, plus `--green-tint`, `--red-tint` and `--hover-wash`. Any colour used in more than one rule lives here, per section 10.
+
+### Live and competition tokens
+- `--live: #ff4b50` is the only red used for an in-progress match (pulsing label, live border). Do not reach for `--red2`, which means brand emphasis, not "happening now".
+- Competition brand colours are stored as **RGB triples** (`--comp-pl`, `--comp-ucl`, `--comp-fa`, `--comp-efl`, `--comp-cs`, `--comp-usc`) so a single hue drives text, fill and border alpha in `.comp-*`. This is the same carve-out as club colours in section 10.
+- `--ha-home` / `--ha-away` tint the H/A chip on a fixture row.
+
 ### Semantic roles (use these, not raw hexes)
 - **Brand / identity:** `--red`. Hover and emphasis: `--red2`.
 - **Transfers domain:** `--gold`.
@@ -182,8 +190,49 @@ A horizontal bar chart: player name, a fill bar coloured by best likelihood (`.h
 - **Tabs** (`.tab`): category filters; muted, bordered; active is solid red. The "rung toggle" tab is the amber exception.
 - **Back link** (`.back`): muted, hover `--red2`.
 
+### Competition badge (`.comp`, macro `comp_badge()`)
+Every fixture and result is stamped with the competition it belongs to: `PL`, `UCL`, `FA`, `EFL`, `CS`, `USC`. Compact, uppercase, `34px` minimum width so a column of them lines up. Follows the badge convention above: low-alpha tinted background, matching accent text, matching border. Purple Premier League, blue Champions League, red FA Cup, green Carabao, gold Community Shield, grey Super Cup. The slug comes from `fixtures.COMPS`, so a new competition needs one row there and one `.comp-<slug>` rule here, nothing else.
+
+### Fixture row (`.fx-row`, macro `match_row()`)
+A four-column grid: when (day over time), competition badge, opponent (crest, name, H/A chip), then either a countdown (upcoming) or a score plus a W/D/L form chip (result). Always framed from Arsenal's point of view: the opponent is named, never Arsenal, and the score reads Arsenal-first. Rows are `--bg2` on `--line`, hover slides `2px` right rather than lifting, so a long list stays calm. A live fixture takes a red border and a pulsing `● status`.
+
+### Next-match card (`.nextcard`)
+One per fixtures page, at the top: competition tag, both crests either side of a kickoff countdown, and a foot line with the date, `SAST` time, venue and days remaining. Reuses the hero's gradient plus red radial wash so the two read as the same family. Goes live-red with a pulsing status when a match is in progress. One focal point only, same rule as the hero.
+
+### View switch vs filters (`.seg` vs `.tab`)
+Two different gestures must not look identical. **Changing view** (Upcoming / Results) is a segmented control: one `--bg2` container, `--line` border, `3px` padding, red fill on the active segment only. **Filtering** (competition chips, category tabs) stays as separate `.tab` pills. On a phone the filter row scrolls horizontally (`flex-wrap:nowrap; overflow-x:auto`, scrollbar hidden) rather than stacking to three rows, same pattern as `.livestrip`. Chips with a zero count for the active view are hidden, never shown as a dead end.
+
+### Month band (`.fx-monthhead`) and record rows (`.rec-row`, `.nu-row`)
+`.fx-monthhead` is the same uppercase, `2px`-tracked, `--dim` label used elsewhere, with a count chip. Bands are separated by `30px` (`24px` on mobile) so a long list reads as months rather than one ribbon. `.nu-row` (Next Up) and `.rec-row` (Season So Far) follow the standard rail-row pattern: full-width link, bottom-border divider, ellipsised name in the flexible middle. A **zero W/D/L chip fades to `opacity:.32`**, because a clean sheet of zero losses must not render as a saturated red alarm.
+
+### Match centre pitch (`.pitch`, macro `pitch()`)
+A fixed-size lineup graphic, not a form layout. `420px` tall (`330px` on a phone) and capped at `560px` wide so **both XIs render identically regardless of how many rows the formation has**. Half-pitch markings: halfway line and centre circle at the top edge, penalty area at the keeper's end, mow stripes at `--pitch-stripe`. Rows read bottom-up, keeper nearest the viewer.
+
+**Rows come from the players' positions (G, D, M, F), never from ESPN's `formationPlace`.** That field is a slot id, not a sequence, and slicing it into formation bands put Declan Rice in Arsenal's back four. The formation string is shown as a label only. `test_matchcentre.py` pins this.
+
+**Position codes are not always the bare letter, so they are reduced to a band before use.** The same idea arrives as `D`, `CD`, `CD-L`, `LB` or `RB` depending on the fixture, and as `M`, `DM`, `AM-L`, `LM` or `CM-R` in midfield. Matching on the first letter placed nobody, tripped the "did every starter get a row" guard, and rendered whole XIs as one flat line of eleven. `_band()` drops the side suffix and reads the last letter, mapping `B` to defence. Anything unrecognised returns `""` and still trips the guard, which is the safety net rather than a silent mis-placement.
+
+Shirt discs take `--kit`, set per side from the club's own colour, with Arsenal forced to `--red` so ESPN's off-brand `#e20520` never leaks in. **Two teams must never appear in the same colour.** Names are surname-only, with the leading initial stripped but compound surnames kept intact ("De Bruyne", not "Bruyne").
+
+### Player headshot (`.pl-face`)
+A bonus on the shirt disc, never the layout. Where ESPN declares `athlete.headshot.href` the photo fills the disc and the jersey number hides; every other player keeps the numbered disc unchanged.
+
+**Sparse coverage is the permanent normal state, not a loading state.** Checked live on 2026-09-09: ESPN carried a headshot for 3 of 42 athletes in the Arsenal v Napoli payload and for none of the 22 starters, and roughly one starter per fixture across four other matches. A pitch of mostly numbers with one or two faces is correct. Three rules stop that reading as broken:
+
+- **The disc keeps its `--kit` fill behind the photo.** ESPN's cut-outs are transparent PNGs, so the player reads as a silhouette on his own colour and a photographed disc matches a numbered one in size, brightness and hue. Backing it with `--bg3` instead is wrong: that token already means "substituted off", so a player who lasted ninety minutes looked substituted. A player who genuinely is subbed gets `--bg3` behind the photo plus the existing greyscale, so the two states stay distinct.
+- **Only PNGs are used.** An opaque JPEG would cover the kit colour entirely, so `_headshot()` drops any other extension rather than displaying it wrong.
+- **The URL comes only from the declared field, never built from the athlete id.** `a.espncdn.com/i/headshots/soccer/players/full/<id>.png` 404s for the overwhelming majority of soccer players (19 of 20 real ids from a single fixture), so a generated URL is a broken image on nearly every shirt. If a declared URL fails anyway, an `onerror` handler drops `.has-face` and the number comes straight back.
+
+Sizing is fixed: `box-sizing:border-box` keeps a photographed disc at the same `30px` (`26px` on a phone), so the fixed-height pitch is untouched. The cut-out is scaled to `210%` and anchored high because at `30px` the shoulders would otherwise leave the face unreadable. **The bench stays text-only**: a `20px` avatar on one arbitrary chip read as a decorative bullet rather than information.
+
+### Primary vs reference blocks
+The page's subject gets `.mc-head-lead` (`1.02rem`, `--text`), which outranks the rail's `.widget-head`. Everything that is context, like the opponent XI, keeps the quiet `.78rem` `--dim` head, dims its player names to `--muted`, and sits inside a `<details>` that starts collapsed under 640px. If a page has two instances of the same component, one of them has to be visibly secondary.
+
+### Match timeline (`.timeline-mc`)
+Left rail with the standard `2px` divider, minute in tabular figures so a long list aligns, an icon per event type. **A goal is tinted by who scored**: `--green-tint` for Arsenal, `--red-tint` for the opposition. Green means good news for Arsenal, never just "a goal happened".
+
 ### Rail widgets (`.widget`)
-Uniform container: `--bg2`, `--line` border, `--radius`, padding `13px 14px`, a `widget-head` (800 weight, emoji prefix). Widgets: Rumour Heat, Done Deals, Injury Room, Premier League mini-table. Rows inside are full-width links with top-border dividers.
+Uniform container: `--bg2`, `--line` border, `--radius`, padding `13px 14px`, a `widget-head` (800 weight, emoji prefix). Widgets: Next Up, Rumour Heat, Done Deals, Injury Room, Premier League mini-table, Season So Far. Rows inside are full-width links with top-border dividers.
 
 ---
 
@@ -221,7 +270,7 @@ This is a news feed; density and scannability are the point.
       *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
     }
     ```
-- **Images:** crest images carry `alt` text and `loading="lazy"` with a monogram fallback on error (real). Keep alt text on any new imagery.
+- **Images:** crest images carry `alt` text and `loading="lazy"` with a monogram fallback on error (real). Keep alt text on any new imagery. **One deliberate exception:** the lineup headshot takes `alt=""`, because the player's surname is rendered directly beneath it and alt text would make a screen reader announce every player twice. Do not "restore" it.
 - **Colour is never the only signal:** likelihood always pairs the colour scale with a text label; form chips show the letter, not just the colour. Keep this pattern: never encode meaning in colour alone.
 
 ---

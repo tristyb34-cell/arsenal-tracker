@@ -2,6 +2,8 @@
 
 Pages:
   /              Arsenal command centre (clustered feed + hero + rail widgets)
+  /fixtures      Full season schedule and results, every competition
+  /match/<id>    Match centre: lineups, live timeline, team news, opponent
   /europe        Europe transfer desk (crest wall, grouped by club)
   /saga/<player> Transfer saga timeline for a player
   PWA: /manifest.webmanifest, /sw.js
@@ -11,6 +13,7 @@ import json
 import subprocess
 import sys
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from flask import Flask, Response, redirect, render_template, request, send_from_directory, url_for
 
@@ -18,10 +21,12 @@ import brief
 import config
 import db
 import fixtures
+import matchcentre
 
 app = Flask(__name__)
 
 LIKELIHOOD_RANK = {r: i for i, r in enumerate(config.LIKELIHOOD_RUNGS)}
+LOCAL_TZ = ZoneInfo("Africa/Johannesburg")
 
 
 def time_ago(iso: str) -> str:
@@ -61,6 +66,66 @@ def crest_url(name):
     return config.CLUB_CRESTS.get(name, "")
 
 
+def _local(iso):
+    """ESPN kickoffs are UTC. Tristan watches them from Johannesburg."""
+    try:
+        dt = datetime.fromisoformat(iso)
+    except (TypeError, ValueError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(LOCAL_TZ)
+
+
+def ko_time(iso):
+    dt = _local(iso)
+    return dt.strftime("%H:%M") if dt else ""
+
+
+def ko_day(iso):
+    dt = _local(iso)
+    return dt.strftime("%a %-d %b") if dt else ""
+
+
+def ko_month(iso):
+    dt = _local(iso)
+    return dt.strftime("%B %Y") if dt else ""
+
+
+def days_until(iso):
+    dt = _local(iso)
+    if not dt:
+        return ""
+    days = (dt.date() - datetime.now(LOCAL_TZ).date()).days
+    if days < 0:
+        return ""
+    return "Today" if days == 0 else ("Tomorrow" if days == 1 else f"in {days} days")
+
+
+app.jinja_env.filters["ko_time"] = ko_time
+app.jinja_env.filters["ko_day"] = ko_day
+app.jinja_env.filters["ko_month"] = ko_month
+def days_until_soon(iso, within=14):
+    """Only the near term. 40 rows of "in 263 days" is noise, not information."""
+    dt = _local(iso)
+    if not dt:
+        return ""
+    days = (dt.date() - datetime.now(LOCAL_TZ).date()).days
+    return days_until(iso) if 0 <= days <= within else ""
+
+
+def surname(name):
+    """"K. De Bruyne" becomes "De Bruyne", not "Bruyne". The leading initial is
+    the only part worth dropping on a pitch graphic."""
+    parts = (name or "").split(" ")
+    if len(parts) > 1 and parts[0].endswith(".") and len(parts[0]) <= 2:
+        return " ".join(parts[1:])
+    return name or ""
+
+
+app.jinja_env.filters["surname"] = surname
+app.jinja_env.filters["days_until"] = days_until
+app.jinja_env.filters["days_until_soon"] = days_until_soon
 app.jinja_env.filters["time_ago"] = time_ago
 app.jinja_env.filters["slug"] = slug
 app.jinja_env.filters["rung_index"] = rung_index
@@ -161,6 +226,60 @@ def combined():
                            active_source=source, search=search, active_rung=rung,
                            heat=heat, injuries=injuries, deals=deals,
                            brief=the_brief, **ctx)
+
+
+@app.route("/fixtures")
+def fixtures_page():
+    """Every Arsenal game, every competition. Upcoming and results."""
+    comp = request.args.get("comp", "All")
+    view = request.args.get("view", "upcoming")
+    if view not in ("upcoming", "results"):
+        view = "upcoming"
+
+    with db.get_conn() as conn:
+        ctx = common_context(conn, "fixtures")
+
+    snap = ctx["snap"] or {}
+    matches = snap.get("fixtures" if view == "upcoming" else "results", [])
+    if comp != "All":
+        matches = [m for m in matches if m["comp"] == comp]
+
+    groups = []
+    for m in matches:
+        label = ko_month(m["kickoff"])
+        if not groups or groups[-1][0] != label:
+            groups.append((label, []))
+        groups[-1][1].append(m)
+
+    return render_template("fixtures.html", groups=groups, view=view,
+                           active_comp=comp, comps=snap.get("comps", []),
+                           n_matches=len(matches), **ctx)
+
+
+@app.route("/match/<event_id>")
+def match(event_id):
+    """Lineups, live timeline and build-up team news for one fixture."""
+    with db.get_conn() as conn:
+        ctx = common_context(conn, "fixtures")
+        snap = ctx["snap"] or {}
+        event = matchcentre.find_event(snap, event_id)
+        if not event:
+            return redirect(url_for("fixtures_page"))
+        mc = matchcentre.get(conn, event)
+        news = db.team_news(conn) if not event.get("finished") else []
+
+    lineups = (mc or {}).get("lineups") or []
+    return render_template("match.html", ev=event, mc=mc, news=news,
+                           ars=matchcentre.arsenal_side(lineups),
+                           opp=matchcentre.opponent_side(lineups), **ctx)
+
+
+@app.route("/refresh-fixtures", methods=["POST"])
+def refresh_fixtures():
+    with db.get_conn() as conn:
+        fixtures.refresh(conn, max_age_minutes=0)
+    return redirect(url_for("fixtures_page", view=request.form.get("view", "upcoming"),
+                            comp=request.form.get("comp", "All")))
 
 
 @app.route("/europe")

@@ -27,7 +27,7 @@ two-page dashboard at **http://127.0.0.1:5057**.
 - **Native alerts** (`alerts.py`) — macOS notification on a confirmed "Here we
   go" or an insider Arsenal post (deduped, fires once per item).
 - **PWA** — installable on a phone home screen (manifest + service worker +
-  icons), bottom tab nav, 5-minute auto-refresh, confetti on "here we go".
+  icons), bottom tab nav, 5-minute auto-refresh.
 - **Matchday skin** — the UI lights up red on matchday (`is_matchday`). A
   deadline-day mode can reuse the same styling (not yet date-triggered).
 

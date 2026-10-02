@@ -75,6 +75,7 @@
   </main>
 
   <aside class="col-rail">
+    {{ ui.next_up_widget(snap) }}
     {{ ui.table_widget(snap) }}
     {{ ui.heat_widget(heat) }}
     {{ ui.deals_widget(deals) }}
@@ -83,7 +84,6 @@
 </div>
 
 {{ ui.bottomnav(page) }}
-<canvas id="confetti"></canvas>
 <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>
 </html>

@@ -18,52 +18,19 @@
     if (h > 0) return h + "h " + m + "m";
     return m + "m";
   }
-  var cd = document.querySelector("[data-countdown]");
-  if (cd) {
+  document.querySelectorAll("[data-countdown]").forEach(function (cd) {
     var when = new Date(cd.getAttribute("data-countdown")).getTime();
-    if (!isNaN(when)) {
-      var tick = function () { cd.textContent = "in " + fmtCountdown(when); };
-      tick();
-      setInterval(tick, 30000);
-    }
-  }
+    if (isNaN(when)) return;
+    var tick = function () { cd.textContent = "in " + fmtCountdown(when); };
+    tick();
+    setInterval(tick, 30000);
+  });
 
-  // 3. confetti when a "here we go" lands (hero or any card)
-  function confetti() {
-    var canvas = document.getElementById("confetti");
-    if (!canvas) return;
-    canvas.style.display = "block";
-    var ctx = canvas.getContext("2d");
-    canvas.width = innerWidth; canvas.height = innerHeight;
-    var colors = ["#ef0107", "#ffffff", "#e0a93a", "#1f9e57"];
-    var bits = [];
-    for (var i = 0; i < 140; i++) {
-      bits.push({
-        x: Math.random() * canvas.width, y: -20 - Math.random() * canvas.height * 0.5,
-        r: 4 + Math.random() * 6, c: colors[(Math.random() * colors.length) | 0],
-        vy: 2 + Math.random() * 4, vx: -2 + Math.random() * 4,
-        rot: Math.random() * 6, vr: -0.2 + Math.random() * 0.4
-      });
-    }
-    var frames = 0;
-    (function draw() {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      bits.forEach(function (b) {
-        b.x += b.vx; b.y += b.vy; b.rot += b.vr;
-        ctx.save(); ctx.translate(b.x, b.y); ctx.rotate(b.rot);
-        ctx.fillStyle = b.c; ctx.fillRect(-b.r / 2, -b.r / 2, b.r, b.r * 0.6);
-        ctx.restore();
-      });
-      frames++;
-      if (frames < 160) requestAnimationFrame(draw);
-      else canvas.style.display = "none";
-    })();
-  }
-  // fire once per session if a fresh "here we go" is on screen
-  var hwg = document.querySelector('[data-hwg="1"]');
-  if (hwg && !sessionStorage.getItem("hwg-celebrated")) {
-    sessionStorage.setItem("hwg-celebrated", "1");
-    setTimeout(confetti, 500);
+
+  // 3. the opponent XI starts collapsed on a phone, open on desktop
+  if (window.innerWidth <= 640) {
+    var oppXI = document.querySelector("details.opp-lineup");
+    if (oppXI) oppXI.removeAttribute("open");
   }
 
   // 4. gentle auto-refresh of the page every 5 min (keeps it live)

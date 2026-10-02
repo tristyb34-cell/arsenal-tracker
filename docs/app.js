@@ -39,6 +39,52 @@
   function crestUrl(name) { return meta.club_crests[name] || ""; }
   function pluralReports(n) { return n + " report" + (n === 1 ? "" : "s"); }
 
+  // ---------- kickoff formatting (ESPN dates are UTC, Tristan watches from Jo'burg) ----------
+  var TZ = "Africa/Johannesburg";
+  function koDate(iso) { var d = new Date(iso); return isNaN(d) ? null : d; }
+  function koTime(iso) {
+    var d = koDate(iso); if (!d) return "";
+    return d.toLocaleTimeString("en-GB", { timeZone: TZ, hour: "2-digit", minute: "2-digit" });
+  }
+  function koDay(iso) {
+    var d = koDate(iso); if (!d) return "";
+    return d.toLocaleDateString("en-GB", { timeZone: TZ, weekday: "short", day: "numeric", month: "short" });
+  }
+  function koMonth(iso) {
+    var d = koDate(iso); if (!d) return "";
+    return d.toLocaleDateString("en-GB", { timeZone: TZ, month: "long", year: "numeric" });
+  }
+  function daysUntil(iso) {
+    var d = koDate(iso); if (!d) return "";
+    var days = Math.ceil((d - Date.now()) / 86400000);
+    if (days < 0) return "";
+    if (days <= 0) return "Today";
+    if (days === 1) return "Tomorrow";
+    return "in " + days + " days";
+  }
+  function daysUntilSoon(iso, within) {
+    var d = koDate(iso); if (!d) return "";
+    var days = Math.ceil((d - Date.now()) / 86400000);
+    return (days >= 0 && days <= (within || 14)) ? daysUntil(iso) : "";
+  }
+  function oppCrest(m, cls) {
+    if (!m.opponent_logo) return '<i class="' + cls + ' logo-mono">' + esc(m.opponent_short || "") + '</i>';
+    return '<img class="' + cls + '" src="' + attr(m.opponent_logo) + '" alt="" width="24" height="24" loading="lazy" ' +
+      'onerror="this.replaceWith(Object.assign(document.createElement(\'i\'),{className:\'' + cls +
+      ' logo-mono\',textContent:\'' + attr(m.opponent_short || "") + '\'}))">';
+  }
+  function surname(name) {
+    var parts = String(name || "").split(" ");
+    if (parts.length > 1 && parts[0].slice(-1) === "." && parts[0].length <= 2) {
+      return parts.slice(1).join(" ");
+    }
+    return name || "";
+  }
+  function compBadge(m) {
+    return '<span class="comp comp-' + esc(m.comp_slug || "pl") + '" title="' + attr(m.comp || "") + '">' +
+      esc(m.comp_code || "") + '</span>';
+  }
+
   // ---------- component renderers (ports of _macros.html) ----------
   function crest(club, cls) {
     cls = cls || "";
@@ -130,6 +176,265 @@
     return '<section class="widget"><h3 class="widget-head">✅ Done Deals</h3>' + rows + '</section>';
   }
 
+  function nextUpWidget(snap, n) {
+    if (!snap || !snap.fixtures || !snap.fixtures.length) return "";
+    var rows = snap.fixtures.slice(0, n || 5).map(function (m) {
+      return '<a class="nu-row" href="#/fixtures">' + compBadge(m) +
+        oppCrest(m, "nu-logo") +
+        '<span class="nu-name">' + esc(m.opponent) + '</span>' +
+        '<span class="nu-ha ha-' + esc(String(m.home_away).toLowerCase()) + '">' + esc(m.home_away) + '</span>' +
+        '<span class="nu-when">' + esc(koDay(m.kickoff)) + '</span></a>';
+    }).join("");
+    return '<section class="widget"><h3 class="widget-head"><a class="widget-link" href="#/fixtures">📅 Next Up ' +
+      '<span class="widget-more" aria-hidden="true">›</span></a></h3>' + rows + '</section>';
+  }
+
+  function seasonRecordWidget(comps) {
+    if (!comps || !comps.length) return "";
+    var rows = comps.map(function (c) {
+      return '<a class="rec-row" href="#/fixtures?view=results&comp=' + encodeURIComponent(c.comp) + '">' +
+        '<span class="comp comp-' + esc(c.comp_slug) + '">' + esc(c.comp_code) + '</span>' +
+        '<span class="rec-name">' + esc(c.comp) + '</span>' +
+        '<span class="rec-wdl"><i class="f f-w' + (c.w ? "" : " is-zero") + '">' + esc(c.w) +
+        '</i><i class="f f-d' + (c.d ? "" : " is-zero") + '">' + esc(c.d) +
+        '</i><i class="f f-l' + (c.l ? "" : " is-zero") + '">' + esc(c.l) + '</i></span></a>';
+    }).join("");
+    return '<section class="widget"><h3 class="widget-head">📊 Season So Far</h3>' + rows + '</section>';
+  }
+
+  function matchRow(m, past) {
+    var right;
+    if (past && m.score) {
+      right = '<span class="fx-score">' + esc(m.score) + '</span>' +
+        (m.result ? '<i class="f f-' + esc(String(m.result).toLowerCase()) + '">' + esc(m.result) + '</i>' : "");
+    } else if (m.live) {
+      right = '<span class="fx-score">' + esc(m.score) + '</span><i class="fx-livedot">● ' + esc(m.status || "") + '</i>';
+    } else {
+      right = '<span class="fx-countdown">' + esc(daysUntilSoon(m.kickoff)) + '</span>';
+    }
+    return '<li><a class="fx-row ' + (past ? "fx-past" : "") + ' ' + (m.live ? "fx-live" : "") + '"' +
+      ' href="#/match/' + encodeURIComponent(m.id) + '">' +
+      '<span class="fx-when"><b>' + esc(koDay(m.kickoff)) + '</b><span>' + esc(koTime(m.kickoff)) + '</span></span>' +
+      compBadge(m) +
+      '<span class="fx-opp">' + oppCrest(m, "fx-logo") +
+        '<span class="fx-name">' + esc(m.opponent) + '</span>' +
+        '<span class="fx-ha ha-' + esc(String(m.home_away).toLowerCase()) + '">' + esc(m.home_away) + '</span>' +
+      '</span>' +
+      '<span class="fx-right">' + right + '</span></a></li>';
+  }
+
+  // ---------- match centre ----------
+  // ESPN serves `access-control-allow-origin: *`, so the phone can fetch a match
+  // straight from the source. That means lineups and live scores work here even
+  // when the Mac that builds the snapshot is off.
+  var BIG_CLUBS = ["Manchester City", "Liverpool", "Manchester United", "Chelsea",
+    "Tottenham Hotspur", "Newcastle United", "Real Madrid", "Barcelona",
+    "Bayern Munich", "Paris Saint-Germain", "Inter Milan", "Atletico Madrid",
+    "AC Milan", "Juventus", "Borussia Dortmund"];
+  var matchTimer = null;
+
+  function findEvent(id) {
+    var f = DATA.football || {};
+    var all = (f.fixtures || []).concat(f.results || []);
+    for (var i = 0; i < all.length; i++) if (String(all[i].id) === String(id)) return all[i];
+    return null;
+  }
+
+  // ESPN only carries a headshot for a minority of players, so most discs keep
+  // their number. Mirrors the face() macro in templates/_macros.html.
+  function faceHtml(p) {
+    if (!p.photo) return "";
+    return '<img class="pl-face" src="' + esc(p.photo) + '" alt="" width="120" height="120"' +
+      ' loading="lazy" decoding="async"' +
+      ' onerror="var d=this.parentElement;d.classList.remove(\'has-face\');this.remove()">';
+  }
+
+  function pitchHtml(side, title, primary) {
+    var rows = (side.rows || []).map(function (row) {
+      return '<div class="pitch-row">' + row.map(function (p) {
+        return '<span class="pl ' + (p.subbed_off ? "subbed" : "") + '">' +
+          '<i class="pl-no ' + (p.photo ? "has-face" : "") + '">' +
+          '<span class="pl-num">' + esc(p.jersey) + '</span>' + faceHtml(p) + '</i>' +
+          '<b class="pl-name">' + esc(surname(p.short || p.name)) + '</b></span>';
+      }).join("") + '</div>';
+    }).join("");
+    var bench = (side.bench || []).length
+      ? '<div class="bench"><span class="bench-label">Bench</span>' + side.bench.map(function (p) {
+          return '<span class="bench-pl ' + (p.subbed_on ? "came-on" : "") + '">' + esc(p.short || p.name) + '</span>';
+        }).join("") + '</div>'
+      : "";
+    var kit = side.team === "Arsenal" ? "var(--red)" : "#" + (side.colour || "7c889d");
+    return '<section class="mc-block ' + (primary ? "is-primary" : "is-secondary") + '">' +
+      '<h3 class="mc-head ' + (primary ? "mc-head-lead" : "") + '">' + esc(title) +
+      ' <span class="mc-form">' + esc(side.formation) + '</span></h3>' +
+      '<div class="pitch" style="--kit: ' + kit + '">' +
+      '<i class="pitch-box" aria-hidden="true"></i>' + rows + '</div>' + bench + '</section>';
+  }
+
+  function timelineHtml(data) {
+    var events = data.timeline || [];
+    if (!events.length) return "";
+    return '<section class="mc-block"><h3 class="mc-head">Timeline</h3><ol class="timeline-mc">' +
+      events.map(function (e) {
+        var t = e.type || "";
+        var icon = e.scoring ? "\u26bd" : (t.indexOf("Red") >= 0 ? "\ud83d\udfe5" : (t.indexOf("Yellow") >= 0 ? "\ud83d\udfe8" : (t.indexOf("Sub") >= 0 ? "\u21c6" : "\u2022")));
+        return '<li class="tl-ev ' + (e.scoring ? "is-goal" : "") + ' ' + (e.ours ? "ours" : "") + ' ' + (e.big ? "is-big" : "") + '">' +
+          '<span class="tl-min">' + esc(e.minute || "") + '</span>' +
+          '<span class="tl-icon">' + icon + '</span>' +
+          '<span class="tl-text">' + esc(e.text) + '</span></li>';
+      }).join("") + '</ol></section>';
+  }
+
+  function teamNewsWidget() {
+    var news = DATA.team_news || [];
+    if (!news.length) return "";
+    return '<section class="widget"><h3 class="widget-head">🩹 Team News</h3>' +
+      news.map(function (n) {
+        return '<a class="tn-row" href="' + attr(n.url) + '" target="_blank" rel="noopener">' +
+          '<span class="tn-title">' + esc(String(n.title).slice(0, 90)) + '</span>' +
+          '<span class="tn-foot">' + esc(n.source) + ' · ' + esc(timeAgo(n.ts)) + '</span></a>';
+      }).join("") + '</section>';
+  }
+
+  function matchHeader(ev, data) {
+    var live = ev.live;
+    var done = ev.finished;
+    var venue = "";
+    try { venue = data.info.venue || ev.venue || ""; } catch (e) { venue = ev.venue || ""; }
+    var mid = (done || live)
+      ? '<span class="nc-score">' + esc(ev.home_goals) + '–' + esc(ev.away_goals) + '</span>' +
+        '<span class="' + (live ? "nc-live" : "nc-v") + '">' + (live ? "● " + esc(ev.status || "live") : "full time") + '</span>'
+      : '<span class="nc-v">v</span><span class="nc-ko" data-countdown="' + attr(ev.kickoff) + '">' + esc(koTime(ev.kickoff)) + '</span>';
+    return '<section class="nextcard ' + (live ? "is-live" : "") + '">' +
+      '<span class="nc-tag comp comp-' + esc(ev.comp_slug) + '">' + esc(ev.comp) + '</span>' +
+      '<span class="nc-teams">' +
+        '<span class="nc-team">' + (ev.home_logo ? '<img src="' + attr(ev.home_logo) + '" alt="" width="52" height="52" loading="eager">' : "") + '<b>' + esc(ev.home) + '</b></span>' +
+        '<span class="nc-mid">' + mid + '</span>' +
+        '<span class="nc-team">' + (ev.away_logo ? '<img src="' + attr(ev.away_logo) + '" alt="" width="52" height="52" loading="eager">' : "") + '<b>' + esc(ev.away) + '</b></span>' +
+      '</span>' +
+      '<span class="nc-foot">' + esc(koDay(ev.kickoff)) + ' · ' + esc(koTime(ev.kickoff)) + ' SAST' +
+        (venue ? ' · ' + esc(venue) : "") + '</span></section>';
+  }
+
+  function collapseOppOnMobile() {
+    if (window.innerWidth > 640) return;
+    var d = document.querySelector("details.opp-lineup");
+    if (d) d.removeAttribute("open");
+  }
+
+  function renderMatch(id) {
+    clearInterval(matchTimer);
+    var ev = findEvent(id);
+    if (!ev) { go("#/fixtures"); return; }
+
+    function paint(data) {
+      try { paintInner(data); }
+      catch (err) {
+        setView('<a class="back" href="#/fixtures">\u2039 All fixtures</a>' +
+          '<p class="empty">Something went wrong rendering this match (' + esc(err.message) + ').</p>');
+      }
+    }
+
+    function paintInner(data) {
+      var h = '<a class="back" href="#/fixtures' + (ev.finished ? "?view=results" : "") + '">‹ All fixtures</a>';
+      h += matchHeader(ev, data || {});
+      if (!data) {
+        h += '<p class="empty">Lineups and the timeline appear from about an hour before kickoff. ' +
+          'Until then there is nothing to show for this one.</p>';
+      } else {
+        h += timelineHtml(data);
+        var sides = data.lineups || [];
+        var ars = sides.filter(function (s) { return s.team === "Arsenal"; })[0];
+        var opp = sides.filter(function (s) { return s.team !== "Arsenal"; })[0];
+        if (ars && ars.published) {
+          h += pitchHtml(ars, "Arsenal XI", true);
+          if (opp && opp.published) {
+            h += '<details class="opp-lineup" open><summary>' + esc(opp.team) + ' XI ' +
+              '<span class="mc-form">' + esc(opp.formation) + '</span></summary>' +
+              pitchHtml(opp, opp.team + " XI") + '</details>';
+          }
+        } else {
+          h += '<section class="mc-block"><h3 class="mc-head">👕 Starting XI</h3>' +
+            '<p class="empty">Not announced yet. Lineups drop about an hour before kickoff.</p></section>';
+        }
+      }
+      setView(h);
+      setRail((ev.finished ? "" : teamNewsWidget()) + tableWidget(DATA.football));
+      startCountdown();
+      collapseOppOnMobile();
+    }
+
+    paint((DATA.matches || {})[String(id)] || null);
+
+    // a live match pulls a fresh snapshot every 45 seconds
+    if (ev.live) matchTimer = setInterval(load, 45000);
+  }
+
+  function renderFixtures(view, comp) {
+    var snap = DATA.football || {};
+    view = (view === "results") ? "results" : "upcoming";
+    comp = comp || "All";
+    var matches = (view === "upcoming" ? snap.fixtures : snap.results) || [];
+    if (comp !== "All") matches = matches.filter(function (m) { return m.comp === comp; });
+
+    var h = "";
+    var nm = snap.live_match || snap.next_match;
+    if (nm) {
+      h += '<a class="nextcard ' + (snap.live_match ? "is-live" : "") + '"' +
+        ' href="#/match/' + encodeURIComponent(nm.id) + '">' +
+        '<span class="nc-tag comp comp-' + esc(nm.comp_slug) + '">' + esc(nm.comp) + '</span>' +
+        '<span class="nc-teams">' +
+          '<span class="nc-team">' + (nm.home_logo ? '<img src="' + attr(nm.home_logo) + '" alt="" width="52" height="52" loading="eager">' : "") +
+            '<b>' + esc(nm.home) + '</b></span>' +
+          '<span class="nc-mid">' + (snap.live_match
+            ? '<span class="nc-score">' + esc(nm.home_goals) + '–' + esc(nm.away_goals) + '</span><span class="nc-live">● ' + esc(nm.status || "") + '</span>'
+            : '<span class="nc-v">v</span><span class="nc-ko" data-countdown="' + attr(nm.kickoff) + '">' + esc(koTime(nm.kickoff)) + '</span>') +
+          '</span>' +
+          '<span class="nc-team">' + (nm.away_logo ? '<img src="' + attr(nm.away_logo) + '" alt="" width="52" height="52" loading="eager">' : "") +
+            '<b>' + esc(nm.away) + '</b></span>' +
+        '</span>' +
+        '<span class="nc-foot">' + esc(koDay(nm.kickoff)) + ' · ' + esc(koTime(nm.kickoff)) + ' SAST' +
+          (nm.venue ? ' · ' + esc(nm.venue) : "") + '</span></a>';
+    }
+
+    h += '<div class="fx-controls"><nav class="seg" aria-label="Fixtures or results">' +
+      '<a class="seg-btn ' + (view === "upcoming" ? "active" : "") + '" href="#/fixtures?view=upcoming&comp=' + encodeURIComponent(comp) + '">Upcoming</a>' +
+      '<a class="seg-btn ' + (view === "results" ? "active" : "") + '" href="#/fixtures?view=results&comp=' + encodeURIComponent(comp) + '">Results</a>' +
+      '</nav></div>';
+
+    var comps = snap.comps || [];
+    h += '<nav class="tabs comptabs">' +
+      '<a class="tab ' + (comp === "All" ? "active" : "") + '" href="#/fixtures?view=' + view + '&comp=All">All comps</a>' +
+      comps.map(function (c) {
+        var n = view === "upcoming" ? c.upcoming : c.played;
+        if (!n && comp !== c.comp) return "";
+        return '<a class="tab comp-tab comp-' + esc(c.comp_slug) + ' ' + (comp === c.comp ? "active" : "") + '" ' +
+          'href="#/fixtures?view=' + view + '&comp=' + encodeURIComponent(c.comp) + '">' + esc(c.comp) +
+          '<span class="badge">' + esc(n) + '</span></a>';
+      }).join("") + '</nav>';
+
+    if (!matches.length) {
+      h += '<p class="empty">' + (view === "results"
+        ? "No results yet this season."
+        : "No fixtures scheduled. Cup rounds appear once the draw is made.") + '</p>';
+    }
+
+    var groups = [];
+    matches.forEach(function (m) {
+      var label = koMonth(m.kickoff);
+      if (!groups.length || groups[groups.length - 1][0] !== label) groups.push([label, []]);
+      groups[groups.length - 1][1].push(m);
+    });
+    groups.forEach(function (g) {
+      h += '<section class="fx-month"><h3 class="fx-monthhead">' + esc(g[0]) + ' <span>' + g[1].length + '</span></h3>' +
+        '<ul class="fx-list">' + g[1].map(function (m) { return matchRow(m, view === "results"); }).join("") + '</ul></section>';
+    });
+
+    setView(h);
+    setRail(seasonRecordWidget(comps) + tableWidget(snap));
+    startCountdown();
+  }
+
   function injuriesWidget(inj) {
     if (!inj || !inj.length) return "";
     var rows = inj.map(function (i) {
@@ -145,23 +450,30 @@
     if (!snap) { setLivestrip(""); return; }
     var matchday = !!snap.is_matchday;
     var h = '<div class="livestrip ' + (matchday ? "matchday" : "") + '">';
+    var live = snap.live_match;
     var nm = snap.next_match;
-    if (nm) {
-      h += '<div class="ls-block ls-next"><span class="ls-label">' + (matchday ? "TODAY" : "NEXT") + '</span>' +
+    if (live) {
+      h += '<a class="ls-block ls-next is-live" href="#/fixtures"><span class="ls-label">● LIVE ' + esc(live.comp_code || "") + '</span>' +
+        '<span class="ls-main">' + esc(live.home_short || live.home) + ' ' + esc(live.home_goals) + '–' + esc(live.away_goals) + ' ' + esc(live.away_short || live.away) + '</span>' +
+        '<span class="ls-sub">' + esc(live.status || "") + '</span></a>';
+    } else if (nm) {
+      h += '<a class="ls-block ls-next" href="#/fixtures"><span class="ls-label">' + (matchday ? "TODAY" : "NEXT") +
+        (nm.comp_code ? ' · ' + esc(nm.comp_code) : '') + '</span>' +
         '<span class="ls-main">' + esc(nm.home_short || nm.home) + ' <i>v</i> ' + esc(nm.away_short || nm.away) + '</span>' +
-        '<span class="ls-sub" data-countdown="' + attr(nm.kickoff) + '">' + esc((nm.kickoff || "").slice(0, 16).replace("T", " ")) + '</span></div>';
+        '<span class="ls-sub" data-countdown="' + attr(nm.kickoff) + '">' + esc(koDay(nm.kickoff)) + ' · ' + esc(koTime(nm.kickoff)) + '</span></a>';
     } else {
       h += '<div class="ls-block ls-next"><span class="ls-label">NEXT</span>' +
         '<span class="ls-main">Fixtures TBA</span><span class="ls-sub">off-season</span></div>';
     }
     var lr = snap.last_result;
     if (lr) {
-      h += '<div class="ls-block"><span class="ls-label">LAST</span>' +
-        '<span class="ls-main">' + esc(lr.home_short || lr.home) + ' ' + esc(lr.home_goals) + '–' + esc(lr.away_goals) + ' ' + esc(lr.away_short || lr.away) + '</span></div>';
+      h += '<a class="ls-block" href="#/fixtures?view=results"><span class="ls-label">LAST' +
+        (lr.comp_code ? ' · ' + esc(lr.comp_code) : '') + '</span>' +
+        '<span class="ls-main">' + esc(lr.home_short || lr.home) + ' ' + esc(lr.home_goals) + '–' + esc(lr.away_goals) + ' ' + esc(lr.away_short || lr.away) + '</span></a>';
     }
     if (snap.form && snap.form.length) {
       var f = snap.form.map(function (r) { return '<i class="f f-' + esc(String(r).toLowerCase()) + '">' + esc(r) + '</i>'; }).join("");
-      h += '<div class="ls-block"><span class="ls-label">FORM</span><span class="ls-form">' + f + '</span></div>';
+      h += '<a class="ls-block" href="#/fixtures?view=results"><span class="ls-label">FORM</span><span class="ls-form">' + f + '</span></a>';
     }
     var ar = snap.arsenal_row;
     if (ar) {
@@ -281,7 +593,7 @@
     var heat = DATA.heat[page] || [];
     var deals = DATA.deals[page] || [];
     var rail = "";
-    if (page === "arsenal" || page === "all") rail += tableWidget(DATA.football);
+    if (page === "arsenal" || page === "all") rail += nextUpWidget(DATA.football) + tableWidget(DATA.football);
     rail += heatWidget(heat, page);
     rail += dealsWidget(deals);
     if (page === "arsenal" || page === "all") rail += injuriesWidget(DATA.injuries);
@@ -289,7 +601,6 @@
 
     bindFeedControls(page);
     staggerCards();
-    maybeConfetti();
     announceCount(feed.length);
   }
 
@@ -521,11 +832,9 @@
   var countdownTimer = null;
   function startCountdown() {
     clearInterval(countdownTimer);
-    var cd = document.querySelector("[data-countdown]");
-    if (!cd) return;
-    var when = new Date(cd.getAttribute("data-countdown")).getTime();
-    if (isNaN(when)) return;
-    function fmt(t) {
+    var els = [].slice.call(document.querySelectorAll("[data-countdown]"));
+    if (!els.length) return;
+    function fmt(when) {
       var diff = when - Date.now();
       if (diff <= 0) return "now";
       var d = Math.floor(diff / 86400000), hh = Math.floor((diff % 86400000) / 3600000), m = Math.floor((diff % 3600000) / 60000);
@@ -533,39 +842,14 @@
       if (hh > 0) return "in " + hh + "h " + m + "m";
       return "in " + m + "m";
     }
-    cd.textContent = fmt();
-    countdownTimer = setInterval(function () { cd.textContent = fmt(); }, 30000);
-  }
-
-  function maybeConfetti() {
-    var hwg = document.querySelector('.feed [data-hwg="1"], .hero[data-hwg="1"]');
-    if (hwg && !sessionStorage.getItem("hwg-celebrated")) {
-      sessionStorage.setItem("hwg-celebrated", "1");
-      setTimeout(confetti, 500);
-    }
-  }
-  function confetti() {
-    var canvas = document.getElementById("confetti");
-    if (!canvas) return;
-    canvas.style.display = "block";
-    var ctx = canvas.getContext("2d");
-    canvas.width = innerWidth; canvas.height = innerHeight;
-    var colors = ["#ef0107", "#ffffff", "#e0a93a", "#1f9e57"], bits = [];
-    for (var i = 0; i < 140; i++) {
-      bits.push({ x: Math.random() * canvas.width, y: -20 - Math.random() * canvas.height * 0.5,
-        r: 4 + Math.random() * 6, c: colors[(Math.random() * colors.length) | 0],
-        vy: 2 + Math.random() * 4, vx: -2 + Math.random() * 4, rot: Math.random() * 6, vr: -0.2 + Math.random() * 0.4 });
-    }
-    var frames = 0;
-    (function draw() {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      bits.forEach(function (b) {
-        b.x += b.vx; b.y += b.vy; b.rot += b.vr;
-        ctx.save(); ctx.translate(b.x, b.y); ctx.rotate(b.rot);
-        ctx.fillStyle = b.c; ctx.fillRect(-b.r / 2, -b.r / 2, b.r, b.r * 0.6); ctx.restore();
+    function tickAll() {
+      els.forEach(function (cd) {
+        var when = new Date(cd.getAttribute("data-countdown")).getTime();
+        if (!isNaN(when)) cd.textContent = fmt(when);
       });
-      if (++frames < 160) requestAnimationFrame(draw); else canvas.style.display = "none";
-    })();
+    }
+    tickAll();
+    countdownTimer = setInterval(tickAll, 30000);
   }
 
   // ---------- header / chrome ----------
@@ -580,6 +864,7 @@
   }
 
   function setActiveNav(page) {
+    document.body.setAttribute("data-page", page);
     document.querySelectorAll(".pagenav .pagelink, .bottomnav a").forEach(function (a) {
       a.classList.toggle("active", a.getAttribute("data-page") === page);
     });
@@ -604,7 +889,9 @@
     var r = parseHash();
     var head = r.parts[0] || "";
 
-    if (head === "europe") { resetFilters(); setActiveNav("europe"); renderEurope(); }
+    if (head === "match") { setActiveNav("fixtures"); renderMatch(decodeURIComponent(r.parts[1] || "")); }
+    else if (head === "fixtures") { setActiveNav("fixtures"); renderFixtures(r.params.view, r.params.comp); }
+    else if (head === "europe") { resetFilters(); setActiveNav("europe"); renderEurope(); }
     else if (head === "all") { resetFilters(); setActiveNav("all"); renderFeedPage("all"); }
     else if (head === "heat") { setActiveNav("heat"); renderHeat(r.params.scope); }
     else if (head === "saga") { setActiveNav("arsenal"); renderSaga(decodeURIComponent(r.parts.slice(1).join("/"))); }
