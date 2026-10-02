@@ -11,7 +11,7 @@ Run standalone or via run_scrape.sh after each scrape.
 
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import brief
 import config
@@ -21,6 +21,12 @@ import matchcentre
 
 OUT_DIR = os.path.join(config.BASE_DIR, "docs", "data")
 OUT_FILE = os.path.join(OUT_DIR, "snapshot.json")
+SAGAS_FILE = os.path.join(OUT_DIR, "sagas.json")
+MATCH_DIR = os.path.join(OUT_DIR, "match")
+
+# Same window live_alerts.py polls in: the lineup drop to well past full time.
+WINDOW_BEFORE = timedelta(minutes=75)
+WINDOW_AFTER = timedelta(minutes=180)
 
 # Fields we keep per cluster (trim the row to what the cards actually render).
 CLUSTER_FIELDS = (
@@ -65,40 +71,96 @@ def _insiders(conn):
     return out
 
 
-def _sagas(conn):
-    """Per-player transfer timelines, merged across both pages, for the saga view."""
+def sagas(conn):
+    """Per-player transfer timelines, merged across both pages, for the saga view.
+
+    Written to its own file: at ~460 KB it was nearly half the snapshot, and the
+    phone downloaded it every five minutes to show on a page it rarely opens."""
     players = set(db.distinct_players(conn, page="arsenal")) | \
         set(db.distinct_players(conn, page="europe"))
     keys = ("title", "url", "source", "credibility", "likelihood")
-    sagas = {}
+    out = {}
     for p in players:
         rows = list(db.saga(conn, p, page="arsenal")) + list(db.saga(conn, p, page="europe"))
         rows.sort(key=lambda r: r["ts"] if "ts" in r.keys() else "")
-        sagas[p] = _rows(rows, keys)
-    return sagas
-
-
-def _matches(conn):
-    """Match centre payloads for the games the phone might actually open.
-
-    ESPN 403s any browser user agent, so the PWA cannot fetch this itself. The
-    Mac fetches it with the plain requests UA that still works and bakes it in.
-    Only the live, next and last matches, to keep the snapshot small."""
-    snap = fixtures.get_cached(conn) or {}
-    out = {}
-    for key in ("live_match", "next_match", "last_result"):
-        ev = snap.get(key)
-        if not ev:
-            continue
-        payload = matchcentre.get(conn, ev)
-        if payload:
-            out[str(ev["id"])] = payload
+        out[p] = _rows(rows, keys)
     return out
 
 
-def build(conn):
+def _match_events(football):
+    """Every match worth a match centre: all results, the live one, the next."""
+    out = {}
+    for e in list(football.get("results") or []) + \
+            [football.get(k) for k in ("live_match", "next_match")]:
+        if e:
+            out[str(e["id"])] = e
+    return out
+
+
+def _current(football, now):
+    """The match in its live window right now, if any."""
+    for e in [football.get("live_match"), football.get("next_match"),
+              football.get("last_result")]:
+        if not e:
+            continue
+        try:
+            ko = datetime.fromisoformat(e["kickoff"])
+        except (KeyError, ValueError):
+            continue
+        if ko - WINDOW_BEFORE <= now <= ko + WINDOW_AFTER:
+            return e
+    return None
+
+
+def football_and_matches(conn):
+    """The fixtures block with any live match patched in, plus every match
+    centre payload keyed by event id.
+
+    ESPN's schedule is cached for 90 minutes, which is longer than a match, so
+    while a game is in its window the match centre summary (polled every
+    minute by live_alerts) supplies the score and clock instead."""
+    football = fixtures.get_cached(conn) or {}
+    payloads = {}
+    for eid, ev in _match_events(football).items():
+        payload = matchcentre.get(conn, ev)
+        if payload:
+            payloads[eid] = payload
+    cur = _current(football, datetime.now(timezone.utc))
+    if cur and (payloads.get(str(cur["id"])) or {}).get("status"):
+        football = fixtures.apply_live(football, cur["id"], payloads[str(cur["id"])]["status"])
+    return football, payloads
+
+
+def _embedded(football, payloads):
+    """The payloads Home needs instantly (live, next, last). The rest are
+    written as one file per match and fetched when opened."""
+    keep = {str(football[k]["id"]) for k in ("live_match", "next_match", "last_result")
+            if football.get(k)}
+    return {k: v for k, v in payloads.items() if k in keep}
+
+
+def write_match_files(payloads):
+    """docs/data/match/<id>.json, rewritten only when the content changed so a
+    finished match does not churn a commit every 30 minutes."""
+    os.makedirs(MATCH_DIR, exist_ok=True)
+    for eid, payload in payloads.items():
+        path = os.path.join(MATCH_DIR, f"{eid}.json")
+        body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        try:
+            with open(path, encoding="utf-8") as f:
+                if f.read() == body:
+                    continue
+        except FileNotFoundError:
+            pass
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(body)
+
+
+def build(conn, football=None, payloads=None):
     deal_keys = ("title", "url", "source", "player", "clubs")
     inj_keys = ("title", "url", "source", "player")
+    if football is None:
+        football, payloads = football_and_matches(conn)
 
     snap = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -111,7 +173,7 @@ def build(conn):
             "club_crests": config.CLUB_CRESTS,
         },
         "brief": brief.get_cached(conn),
-        "football": fixtures.get_cached(conn),
+        "football": football,
         "insiders": _insiders(conn),
         "arsenal": {
             "clusters": [_cluster(c) for c in db.query_clusters(conn, page="arsenal")],
@@ -137,8 +199,7 @@ def build(conn):
         },
         "injuries": _rows(db.injury_board(conn), inj_keys),
         "team_news": _rows(db.team_news(conn), ("title", "url", "source", "player", "ts")),
-        "matches": _matches(conn),
-        "sagas": _sagas(conn),
+        "matches": _embedded(football, payloads or {}),
     }
     return snap
 
@@ -146,7 +207,12 @@ def build(conn):
 def main():
     os.makedirs(OUT_DIR, exist_ok=True)
     with db.get_conn() as conn:
-        snap = build(conn)
+        football, payloads = football_and_matches(conn)
+        snap = build(conn, football, payloads)
+        saga_map = sagas(conn)
+    write_match_files(payloads)
+    with open(SAGAS_FILE, "w", encoding="utf-8") as f:
+        json.dump(saga_map, f, ensure_ascii=False, separators=(",", ":"))
     with open(OUT_FILE, "w", encoding="utf-8") as f:
         json.dump(snap, f, ensure_ascii=False, separators=(",", ":"))
     size_kb = os.path.getsize(OUT_FILE) / 1024

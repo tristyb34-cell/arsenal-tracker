@@ -9,6 +9,7 @@ Cached in kv_cache under `match:<event_id>`. The TTL follows the match state:
 a finished match never changes, a live one changes every minute.
 """
 
+import colorsys
 import json
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
@@ -27,6 +28,10 @@ TTL_PREMATCH = timedelta(minutes=5)
 TTL_UPCOMING = timedelta(hours=6)
 TTL_FINISHED = timedelta(days=30)
 
+# Bump when the payload shape changes, so cached payloads built by older code
+# (no scorers, no stats) are rebuilt instead of served for their 30-day TTL.
+SCHEMA = 3
+
 # Tristan's words: he does not care about the opponent unless they are one of
 # these. Everyone else gets a crest and nothing more.
 BIG_CLUBS = {
@@ -37,7 +42,29 @@ BIG_CLUBS = {
 }
 
 GOAL_TYPES = {"Goal", "Own Goal", "Penalty - Scored"}
-BIG_EVENT_TYPES = GOAL_TYPES | {"Red Card", "Yellow Red Card"}
+RED_TYPES = {"Red Card", "Yellow Red Card", "Second Yellow Card"}
+
+# keyEvents type text -> the handful of kinds the timeline draws. ESPN varies
+# the goal text ("Goal - Header", "Goal - Free-kick"), so goals match on prefix.
+KINDS = {
+    "Penalty - Scored": "pen", "Own Goal": "og",
+    "Penalty - Missed": "pen_miss", "Penalty - Saved": "pen_miss",
+    "Yellow Card": "yellow", "Red Card": "red",
+    "Yellow Red Card": "red", "Second Yellow Card": "red",
+    "Substitution": "sub", "Kickoff": "ko", "Halftime": "ht",
+    "End Regular Time": "ft", "End Extra Time": "ft",
+}
+SKIP_TYPES = {"Start Delay", "End Delay", "Start 2nd Half"}
+
+# team stats worth a bar, in reading order. Only drawn when ESPN sends both
+# sides (it does for every finished 2026-27 match checked on 2026-10-02).
+STATS = [
+    ("possessionPct", "Possession"), ("totalShots", "Shots"),
+    ("shotsOnTarget", "Shots on target"), ("wonCorners", "Corners"),
+    ("foulsCommitted", "Fouls"), ("offsides", "Offsides"),
+    ("yellowCards", "Yellow cards"), ("redCards", "Red cards"),
+    ("saves", "Saves"),
+]
 
 
 def _get(url, params=None):
@@ -47,15 +74,19 @@ def _get(url, params=None):
 
 
 def _ttl(event):
-    if event.get("live"):
-        return TTL_LIVE
     if event.get("finished"):
         return TTL_FINISHED
+    if event.get("live"):
+        return TTL_LIVE
     try:
         mins = (datetime.fromisoformat(event["kickoff"])
                 - datetime.now(timezone.utc)).total_seconds() / 60
     except (KeyError, ValueError):
         return TTL_UPCOMING
+    if -180 <= mins <= 0:
+        # kicked off, but the fixtures cache (rebuilt every 90 minutes) may not
+        # know yet. Treat it as live rather than polling every five minutes.
+        return TTL_LIVE
     return TTL_PREMATCH if mins <= 180 else TTL_UPCOMING
 
 
@@ -63,25 +94,43 @@ def build(event):
     """Fetch and shape the match centre payload for one fixture."""
     data = _get(SUMMARY.format(league=event.get("league", "eng.1")),
                 {"event": event["id"]})
+    return shape(event, data)
+
+
+def shape(event, data):
+    timeline = _timeline(data)
+    state = live_state(data)
     return {
+        "status": state,
+        "scorers": scorers(timeline, _short_names(data)),
+        "timeline": with_markers(timeline, state),
+        "stats": _stats(data),
         "lineups": _lineups(data),
-        "timeline": _timeline(data),
         "info": _info(data),
         "opponent": _opponent(event, data),
+        "schema": SCHEMA,
         "built_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
 def _lineups(data):
+    marks = _player_marks(data)
     out = []
     for r in data.get("rosters") or []:
         players = [_player(p) for p in r.get("roster") or []]
+        for p in players:
+            p["marks"] = marks.get(p["id"], [])
         starters = [p for p in players if p["starter"]]
         starters.sort(key=lambda p: p["place"])
+        team = r.get("team") or {}
+        kit, ink = kit_colours(team.get("color"), team.get("alternateColor"),
+                               team.get("displayName") == TEAM)
         out.append({
-            "team": (r.get("team") or {}).get("displayName", ""),
-            "logo": (r.get("team") or {}).get("logo", ""),
-            "colour": (r.get("team") or {}).get("color", "") or "",
+            "team": team.get("displayName", ""),
+            "logo": team.get("logo", ""),
+            "colour": team.get("color", "") or "",
+            "kit": kit,
+            "ink": ink,
             "home_away": r.get("homeAway", ""),
             "formation": r.get("formation") or "",
             "rows": _shape(starters, r.get("formation") or ""),
@@ -94,6 +143,7 @@ def _lineups(data):
 def _player(p):
     a = p.get("athlete") or {}
     return {
+        "id": str(a.get("id") or ""),
         "name": a.get("displayName") or a.get("fullName") or "",
         "short": a.get("shortName") or "",
         "jersey": p.get("jersey") or a.get("jersey") or "",
@@ -190,22 +240,246 @@ def _shape(starters, formation):
 
 
 def _timeline(data):
+    """Goals, cards and subs in match order, each tagged with its side.
+
+    `team` on a key event is the side that BENEFITED: checked against three
+    real own goals on 2026-10-02, "Own Goal by Piero Hincapie, Arsenal" carries
+    team=Chelsea. So `side` is always the side whose score went up, and the
+    player named first is the one who put it in the net, either end."""
+    sides = _sides(data)
+    short = _short_names(data)
+    goals = {"home": 0, "away": 0}
     out = []
     for e in data.get("keyEvents") or []:
-        kind = (e.get("type") or {}).get("text", "")
+        kind_text = (e.get("type") or {}).get("text", "")
         text = (e.get("text") or "").strip()
-        if not text or kind in ("Start Delay", "End Delay"):
+        if not text or kind_text in SKIP_TYPES or e.get("shootout"):
+            # shootout kicks are not goals; the fixture note carries the result
             continue
-        scoring = bool(e.get("scoringPlay")) or kind in GOAL_TYPES
-        out.append({
+        scoring = bool(e.get("scoringPlay")) or kind_text in GOAL_TYPES
+        kind = KINDS.get(kind_text) or ("goal" if scoring or kind_text.startswith("Goal") else "other")
+        team = (e.get("team") or {})
+        side = sides.get(str(team.get("id") or ""), "")
+        names = [((x.get("athlete") or {}).get("displayName") or "")
+                 for x in e.get("participants") or []]
+        row = {
             "minute": (e.get("clock") or {}).get("displayValue", ""),
-            "type": kind,
+            "type": kind_text,
             "text": text,
             "scoring": scoring,
-            "ours": scoring and _scored_by_arsenal(text),
-            "big": kind in BIG_EVENT_TYPES,
-        })
+            "ours": scoring and (team.get("displayName") == TEAM
+                                 if team.get("displayName") else _scored_by_arsenal(text)),
+            "big": scoring or kind_text in RED_TYPES,
+            "kind": kind,
+            "side": side,
+            "player": names[0] if names else "",
+            # the assist for a goal, the player going off for a sub
+            "detail": names[1] if len(names) > 1 and kind in ("goal", "sub") else "",
+            # pitch-style surnames for a phone-width timeline ("De Bruyne")
+            "player_short": short.get(names[0], "") if names else "",
+            "detail_short": short.get(names[1], "") if len(names) > 1 else "",
+            "period": (e.get("period") or {}).get("number"),
+            "secs": (e.get("clock") or {}).get("value"),
+        }
+        if scoring and side:
+            goals[side] += 1
+            row["score"] = f"{goals['home']}–{goals['away']}"
+        if kind in ("ht", "ft"):
+            row["score"] = f"{goals['home']}–{goals['away']}"
+        out.append(row)
     return out
+
+
+def with_markers(timeline, state):
+    """The timeline as drawn: ESPN's own period markers swapped for our own.
+
+    ESPN sends "Halftime" and "End Regular Time" for some matches and not
+    others (4 of 8 finished 2026-27 games had no half-time marker), so a
+    timeline built from them looked different match to match. HT goes after
+    the last first-half event once the second half exists, FT once the match
+    is complete, each carrying the score at that point. Kept out of
+    _timeline() itself because live_alerts keys alerts by list position."""
+    events = [t for t in timeline if t["kind"] not in ("ko", "ht", "ft")]
+    state = state or {}
+    second_half = any((t.get("period") or 1) >= 2 for t in events) or \
+        state.get("name") == "STATUS_HALFTIME" or (state.get("period") or 0) >= 2 or \
+        bool(state.get("completed"))
+    out, goals, ht_done = [], {"home": 0, "away": 0}, False
+    for t in events:
+        if second_half and not ht_done and (t.get("period") or 1) >= 2:
+            out.append(_marker("ht", "HT", goals))
+            ht_done = True
+        out.append(t)
+        if t["scoring"] and t["side"] in goals:
+            goals[t["side"]] += 1
+    if second_half and not ht_done:
+        out.append(_marker("ht", "HT", goals))
+    if state.get("completed"):
+        if state.get("home_goals") is not None:
+            goals = {"home": state["home_goals"], "away": state["away_goals"]}
+        out.append(_marker("ft", "FT", goals))
+    return out
+
+
+def _marker(kind, label, goals):
+    return {"minute": label, "type": label, "text": "", "scoring": False, "ours": False,
+            "big": False, "kind": kind, "side": "", "player": "", "detail": "",
+            "player_short": "", "detail_short": "",
+            "period": None, "secs": None, "score": f"{goals['home']}–{goals['away']}"}
+
+
+def _sides(data):
+    """team id -> "home"/"away", from the summary header."""
+    try:
+        comps = data["header"]["competitions"][0]["competitors"]
+    except (KeyError, IndexError, TypeError):
+        return {}
+    return {str(c.get("id") or (c.get("team") or {}).get("id")): c.get("homeAway", "")
+            for c in comps}
+
+
+def _short_names(data):
+    """athlete id and display name -> pitch-style surname ("De Bruyne")."""
+    out = {}
+    for r in data.get("rosters") or []:
+        for p in r.get("roster") or []:
+            a = p.get("athlete") or {}
+            short = surname(a.get("shortName") or a.get("displayName") or "")
+            for key in (a.get("displayName"), str(a.get("id") or "")):
+                if key:
+                    out[key] = short
+    return out
+
+
+def surname(name):
+    """"K. De Bruyne" becomes "De Bruyne", not "Bruyne". The leading initial is
+    the only part worth dropping."""
+    parts = (name or "").split(" ")
+    if len(parts) > 1 and parts[0].endswith(".") and len(parts[0]) <= 2:
+        return " ".join(parts[1:])
+    return name or ""
+
+
+def scorers(timeline, short=None):
+    """Goal scorers per side, minutes in order, pens and own goals marked.
+
+    An own goal is listed under the side it counted for, which is how every
+    broadcaster shows it ("Hincapie 45+2' (OG)" under Chelsea)."""
+    short = short or {}
+    out = {"home": [], "away": []}
+    for ev in timeline:
+        if not ev["scoring"] or ev["side"] not in out:
+            continue
+        name = short.get(ev["player"]) or (ev["player"].split(" ")[-1] if ev["player"] else "Goal")
+        rows = out[ev["side"]]
+        row = next((r for r in rows if r["name"] == name and r["og"] == (ev["kind"] == "og")), None)
+        if not row:
+            row = {"name": name, "og": ev["kind"] == "og", "goals": []}
+            rows.append(row)
+        row["goals"].append({"minute": ev["minute"], "pen": ev["kind"] == "pen"})
+    return out
+
+
+def _player_marks(data):
+    """athlete id -> the badges drawn on that player's disc: goals, assists,
+    cards and the minute he came off or on."""
+    marks = {}
+
+    def add(pid, kind, minute):
+        if pid:
+            marks.setdefault(pid, []).append({"kind": kind, "minute": minute})
+
+    for e in data.get("keyEvents") or []:
+        if e.get("shootout"):
+            continue
+        kind_text = (e.get("type") or {}).get("text", "")
+        scoring = bool(e.get("scoringPlay")) or kind_text in GOAL_TYPES
+        kind = KINDS.get(kind_text) or ("goal" if scoring or kind_text.startswith("Goal") else "")
+        ids = [str((x.get("athlete") or {}).get("id") or "") for x in e.get("participants") or []]
+        minute = (e.get("clock") or {}).get("displayValue", "")
+        if not ids:
+            continue
+        if kind in ("goal", "pen"):
+            add(ids[0], "goal", minute)
+            if len(ids) > 1 and kind == "goal":
+                add(ids[1], "assist", minute)
+        elif kind in ("og", "yellow", "red"):
+            add(ids[0], kind, minute)
+        elif kind == "sub":
+            add(ids[0], "on", minute)
+            if len(ids) > 1:
+                add(ids[1], "off", minute)
+    return marks
+
+
+def _stats(data):
+    sides = _sides(data)
+    by_side = {}
+    for t in (data.get("boxscore") or {}).get("teams") or []:
+        side = sides.get(str((t.get("team") or {}).get("id") or ""))
+        if side:
+            by_side[side] = {x.get("name"): x.get("displayValue") for x in t.get("statistics") or []}
+    if set(by_side) != {"home", "away"}:
+        return []
+    out = []
+    for key, label in STATS:
+        h, a = _num(by_side["home"].get(key)), _num(by_side["away"].get(key))
+        if h is None or a is None:
+            continue
+        out.append({"key": key, "label": label, "home": h, "away": a,
+                    "pct": key == "possessionPct"})
+    # a payload of all zeros is a match that has not started, not a stat line
+    return out if any(s["home"] or s["away"] for s in out) else []
+
+
+def _num(v):
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return int(f) if f.is_integer() else round(f, 1)
+
+
+def kit_colours(colour, alternate, is_arsenal):
+    """Shirt disc fill and number colour for one side.
+
+    Arsenal always wear the brand red (set in CSS). An opponent whose primary
+    colour is also red switches to its alternate so the two XIs never share a
+    colour. The number colour is whichever of white or near-black reads better
+    on the fill, so a white or sky-blue kit no longer carries white numbers."""
+    if is_arsenal:
+        return "", "light"
+    for c in (colour, alternate):
+        rgb = _rgb(c)
+        if rgb and not _reddish(rgb):
+            return "#" + c.lower(), _ink(rgb)
+    return "#7c889d", "dark"
+
+
+def _rgb(hexstr):
+    h = (hexstr or "").strip().lstrip("#")
+    if len(h) != 6:
+        return None
+    try:
+        return tuple(int(h[i:i + 2], 16) / 255 for i in (0, 2, 4))
+    except ValueError:
+        return None
+
+
+def _reddish(rgb):
+    hue, light, sat = colorsys.rgb_to_hls(*rgb)
+    deg = hue * 360
+    return (deg >= 345 or deg <= 15) and sat > 0.45 and 0.2 < light < 0.75
+
+
+def _ink(rgb):
+    def lum(c):
+        lin = [x / 12.92 if x <= 0.03928 else ((x + 0.055) / 1.055) ** 2.4 for x in c]
+        return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
+    bg = lum(rgb)
+    on_white = 1.05 / (bg + 0.05)
+    on_dark = (bg + 0.05) / (lum((10 / 255, 14 / 255, 22 / 255)) + 0.05)
+    return "light" if on_white >= on_dark else "dark"
 
 
 def _scored_by_arsenal(text):
@@ -223,10 +497,13 @@ def _info(data):
     names = []
     for b in casts:
         names += [m.get("shortName") or m.get("name") for m in (b.get("media") and [b["media"]] or [])]
+    referee = next((o.get("displayName") for o in g.get("officials") or []
+                    if ((o.get("position") or {}).get("name") or "") == "Referee"), "")
     return {
         "venue": venue.get("fullName", ""),
         "city": (venue.get("address") or {}).get("city", ""),
         "attendance": g.get("attendance"),
+        "referee": referee or "",
         "broadcast": ", ".join(n for n in names if n),
     }
 
@@ -267,7 +544,8 @@ def live_state(data):
     not need a second scoreboard call."""
     try:
         comp = data["header"]["competitions"][0]
-        st = comp["status"]["type"]
+        status = comp["status"]
+        st = status["type"]
         goals = {c["homeAway"]: _int(c.get("score")) for c in comp["competitors"]}
         teams = {c["homeAway"]: (c.get("team") or {}).get("displayName", "")
                  for c in comp["competitors"]}
@@ -280,6 +558,11 @@ def live_state(data):
         "completed": bool(st.get("completed")),
         "home": teams.get("home", ""), "away": teams.get("away", ""),
         "home_goals": goals.get("home"), "away_goals": goals.get("away"),
+        # seconds played, so a phone can keep the minute ticking between polls
+        "clock": status.get("clock"),
+        "display_clock": status.get("displayClock", ""),
+        "period": status.get("period"),
+        "clock_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -290,26 +573,36 @@ def _int(v):
         return None
 
 
+def _fresh(cached, row, event):
+    if cached.get("schema") != SCHEMA:
+        return False
+    if event.get("finished") and not (cached.get("status") or {}).get("completed"):
+        # captured while the game was still on: the 30-day finished TTL would
+        # otherwise freeze an 88th-minute timeline as the final record
+        return False
+    try:
+        age = datetime.now(timezone.utc) - datetime.fromisoformat(row["updated_at"])
+    except (TypeError, ValueError):
+        return False
+    return age < _ttl(event)
+
+
 def get(conn, event, force=False):
     """Cached match centre payload. Returns None if ESPN is unreachable."""
     key = f"match:{event['id']}"
     row = db.kv_get(conn, key)
-    if row and row["value"] and not force:
+    cached = None
+    if row and row["value"]:
         try:
-            age = datetime.now(timezone.utc) - datetime.fromisoformat(row["updated_at"])
-            if age < _ttl(event):
-                return json.loads(row["value"])
-        except (ValueError, json.JSONDecodeError):
-            pass
+            cached = json.loads(row["value"])
+        except json.JSONDecodeError:
+            cached = None
+    if cached and not force and _fresh(cached, row, event):
+        return cached
     try:
         payload = build(event)
     except Exception:
-        if row and row["value"]:
-            try:
-                return json.loads(row["value"])
-            except json.JSONDecodeError:
-                return None
-        return None
+        return cached
     db.kv_set(conn, key, json.dumps(payload),
               datetime.now(timezone.utc).isoformat())
     return payload

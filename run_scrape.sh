@@ -14,9 +14,11 @@ echo "----- $(date) -----" >> logs/scrape.log
 # Each step is checked. The old version pushed regardless of whether the commit
 # succeeded, and `git push` on an unchanged branch exits 0 — so a failing commit
 # logged "published snapshot to Pages" every run while publishing nothing.
-if ! git diff --quiet -- docs/data/snapshot.json 2>/dev/null; then
-  git add docs/data/snapshot.json
-  if ! git commit -q -m "Update snapshot $(date -u +%Y-%m-%dT%H:%MZ)" >> logs/scrape.log 2>&1; then
+# docs/data holds snapshot.json plus one file per match centre (docs/data/match/),
+# so stage the whole folder: new match files are untracked until added.
+git add docs/data
+if ! git diff --cached --quiet -- docs/data 2>/dev/null; then
+  if ! git commit -q -m "Update snapshot $(date -u +%Y-%m-%dT%H:%MZ)" -- docs/data >> logs/scrape.log 2>&1; then
     echo "snapshot COMMIT FAILED (pre-commit hook? see above) — Pages not updated" >> logs/scrape.log
   elif GIT_TERMINAL_PROMPT=0 git push -q origin main >> logs/scrape.log 2>&1; then
     echo "published snapshot to Pages" >> logs/scrape.log

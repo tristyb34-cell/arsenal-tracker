@@ -1,315 +1,200 @@
 # Arsenal Tracker: Design System Contract
 
-This is the persistent design contract for the Arsenal Tracker app. Read it before touching `static/style.css` or any template. It records what the design actually is today, and marks proposed conventions clearly so we do not drift.
-
-Values labelled **(real)** are extracted from the current `static/style.css`. Values labelled **(proposed)** are sensible defaults to fill gaps, and should be adopted deliberately, not assumed to already exist.
+The persistent design contract for the Arsenal Tracker app. Read it before touching `docs/style.css` or `docs/app.js`. Rewritten on 2026-10-02 for the club-app rebuild (Home / Matches / match centre / News / Table). Every value here is **real**: it is what the stylesheet ships today.
 
 ---
 
 ## 1. Purpose & personality
 
-A personal Arsenal FC news and transfer tracker. Two main pages: Arsenal news (`/`) and Other Teams / Europe transfers (`/europe`), plus a combined `/all` feed and per-player saga timelines (`/saga/<player>`).
+A personal Arsenal club app, read on an iPhone first. The bar is FotMob and the official Arsenal app: the match leads, news supports.
 
-Personality: a clean, fast, content-focused news app with a strong Arsenal identity. Think a broadcast sports desk at night: dark surface, Arsenal red as the signal colour, dense but scannable cards, live match strip up top. It is "broadcast dark", not a glossy marketing site.
-
-Principles:
-- Content first. The story headline is the hero of every card, not chrome.
-- Scannable at a glance. Category, likelihood, source consensus and timestamp all readable without clicking.
-- Fast. Server-rendered, no client framework, minimal JavaScript.
-- Arsenal red is a signal, not wallpaper. Use it for identity, active states and urgency, not large fills.
-
----
-
-## 2. Tech stack
-
-- **Flask + Jinja2 templates + plain CSS.** No React, no Vue, no Tailwind, no build step.
-- A single stylesheet: `static/style.css`. No preprocessor, no PostCSS.
-- Templates live in `templates/`. Shared UI is built from Jinja macros in `templates/_macros.html` (topbar, livestrip, meter, card, rail widgets, bottomnav).
-- Because there is no build step, **design tokens are CSS custom properties on `:root`**. This is already the pattern in the file. Keep it. Do not introduce a CSS framework or a token build tool to "improve" this.
-- Progressive web app: `manifest.webmanifest` and `sw.js` served from `static/`.
-
-Rule: any new colour, radius or shadow goes through a `:root` variable, not a hard-coded literal in a rule. See section 10.
+- **Who:** one Arsenal fan in Johannesburg. Opens it to answer "when's the next game / what's the score / what happened", then reads the news.
+- **Feel:** a broadcast gallery at night. Dark navy surfaces, Arsenal red as the signal, scores set like a scoreboard.
+- **Principles:**
+  - The match is the hero. Every match surface uses the same scoreboard grammar (crest, score or kick-off, crest).
+  - Red means "Arsenal, now": live, the active tab, Arsenal's own row. Never a fill for decoration.
+  - Structure carries meaning. No eyebrow labels, no explainer paragraphs, no middle-dot strings: layout separates the facts.
+  - One signature, used consistently: the **match rail** (section 6).
 
 ---
 
-## 3. Colour palette
+## 2. Tech stack and the one-UI rule
 
-All values below are **(real)**, taken verbatim from `:root` in `static/style.css`.
+- **One client** in `docs/` (`index.html`, `app.js`, `style.css`, `sw.js`), plain JavaScript, plain CSS, no framework, no build step.
+- **Two front doors, same files.** GitHub Pages serves `docs/` with a static `data/snapshot.json` pushed after every scrape. Flask (`app.py`, `127.0.0.1:5057`) serves the same `docs/` files and builds the same JSON live from `arsenal.db`. The Jinja templates were deleted on 2026-10-02 because the desktop and phone UIs drifted every time one was touched. **Never reintroduce a second UI.** Desktop-only behaviour is CSS (`min-width:900px`) or a flag in the JSON (`local: true` unlocks the Refresh button).
+- **Data files:** `data/snapshot.json` (everything Home/Matches/News/Table need), `data/match/<id>.json` (one match centre per finished, live and next match), `data/sagas.json` (loaded only on a saga page; it was ~460 KB of a 1 MB snapshot).
+- **Live:** during a match the client polls ESPN's summary directly every 30s (ESPN sends `access-control-allow-origin: *`). `parseSummary()` in `app.js` mirrors `matchcentre.py`; change one, change the other.
+- **Design tokens are CSS custom properties on `:root`.** Any colour used twice is a token.
 
-### Surfaces and structure
+---
+
+## 3. Colour
+
+### Surfaces (one navy hue, lightness climbs)
 | Token | Value | Role |
-|-------|-------|------|
-| `--bg` | `#0a0e16` | App background (near-black navy). Body also layers two faint radial gradients: red top-right, blue top-left. |
-| `--bg2` | `#121826` | Card and widget surface. |
-| `--bg3` | `#1a2233` | Raised surface: pills, inputs, hover fills, meter track. |
-| `--line` | `#232c40` | Borders and dividers. |
+|---|---|---|
+| `--bg` | `#0a0e16` | Page. Also input wells (inputs sit darker than their card). |
+| `--bg2` | `#121826` | Cards and grouped lists. |
+| `--bg3` | `#1a2233` | Raised: minute pills, chips' pressed state, empty meter segments. |
+| `--bg4` | `#222b3e` | Selected segment, HT/FT markers, the "All" crest tile. |
+| `--line` | `#232c40` | Solid borders (chips, inputs). |
+| `--line-soft` | `rgba(255,255,255,.06)` | Card edges and row dividers. Borders should disappear until you look for them. |
+| `--line-strong` | `rgba(255,255,255,.16)` | Hover/selected edges, the HT tick on the rail. |
 
-### Text
-| Token | Value | Role |
-|-------|-------|------|
-| `--text` | `#e7ecf3` | Primary text. |
-| `--muted` | `#8b97ad` | Secondary text: summaries, sources, labels. |
-| `--dim` | `#7a8aa3` | Tertiary text: timestamps, counts, placeholders. Bumped from `#5e6b82` (2026-06-23) to clear AA 4.5:1 on dark; the old value failed for the search placeholder and live-strip labels. |
+### Text (four levels)
+`--text #e7ecf3` (primary), `--grey-text #c5cddb` (strong secondary: scorer names, headlines under a heading), `--muted #8b97ad` (secondary, 6.0:1 on `--bg2`), `--dim #7a8aa3` (metadata only, 5.1:1 on `--bg2`, 4.5:1 on `--bg3`: never smaller than .72rem on `--bg3`).
 
-### Brand and accents
-| Token | Value | Role |
-|-------|-------|------|
-| `--red` | `#ef0107` | **Arsenal red. Primary brand colour.** Active nav, hero tag, matchday accents, category spine for injuries. This is the official Arsenal red. |
-| `--red2` | `#ff2b30` | Brighter red for hover and link emphasis. |
-| `--gold` | `#e0a93a` | Transfers accent: category, player tags, done deals. |
-| `--blue` | `#2f7ed8` | Informational / insider accent: filter submit button, insider glow, match-results category. |
-| `--green` | `#1f9e57` | Positive / "done" state: morning brief, top likelihood rung, win badge. |
-| `--amber` | `#e08a1e` | Mid-tier likelihood, advanced-rumour heat, the rung toggle. |
-| `--grey` | `#7c889d` | Neutral / lowest likelihood rung, draw badge. |
+### Signal colours, one meaning each
+| Token | Meaning |
+|---|---|
+| `--red #ef0107` | Arsenal identity and active state: tab icon, Arsenal's table row tint (`--red-tint`), Arsenal's stat bars, the underline on the active match-centre tab. |
+| `--red-deep #d00008` | Any red **fill carrying white text** (live pill, Arsenal shirt discs). `#ef0107` is 4.49:1 with white, just under AA. |
+| `--live #ff4b50` | "Happening now": live border, live rail fill and its "now" dot. |
+| `--green #1f9e57` / `--green-text #7fe0a6` | Good for Arsenal: win chip, Arsenal goal markers and minute pills, "came on". Dark text on a green fill (`--bg` on `--green` is 5.6:1); white on green is 3.45:1 and fails. |
+| `--red-text #ff8a8d` | Loss chip, "came off" arrows. |
+| `--amber #e08a1e` | Transfer heat (heat bars, "Close to done" chip) and half-time. |
+| `--yellow-card #f2c230` | Yellow cards only. |
+| `--gold`, `--blue` | The likelihood ladder and competition badges only. |
 
-### Pitch and tint tokens
-`--pitch-a` / `--pitch-b` (turf gradient), `--pitch-edge`, `--pitch-line`, `--pitch-stripe`, plus `--green-tint`, `--red-tint` and `--hover-wash`. Any colour used in more than one rule lives here, per section 10.
+### Likelihood ladder (load-bearing, do not recolour)
+Rumour `--grey`, Developing `--blue`, Advanced `--amber`, Here we go `--green`. Order is fixed by `config.LIKELIHOOD_RUNGS`. Always paired with the text label.
 
-### Live and competition tokens
-- `--live: #ff4b50` is the only red used for an in-progress match (pulsing label, live border). Do not reach for `--red2`, which means brand emphasis, not "happening now".
-- Competition brand colours are stored as **RGB triples** (`--comp-pl`, `--comp-ucl`, `--comp-fa`, `--comp-efl`, `--comp-cs`, `--comp-usc`) so a single hue drives text, fill and border alpha in `.comp-*`. This is the same carve-out as club colours in section 10.
-- `--ha-home` / `--ha-away` tint the H/A chip on a fixture row.
-
-### Semantic roles (use these, not raw hexes)
-- **Brand / identity:** `--red`. Hover and emphasis: `--red2`.
-- **Transfers domain:** `--gold`.
-- **Match / informational:** `--blue`.
-- **Success / confirmed:** `--green`.
-- **Warning / in-progress:** `--amber`.
-- **Neutral / unknown:** `--grey`.
-- **Loss / negative:** `--red`.
-
-### Likelihood ladder colour scale (real, load-bearing)
-The transfer likelihood ladder maps four rungs to a deliberate cool-to-warm-to-go scale:
-- Rumour: `--grey` `#7c889d`
-- Developing: `--blue` `#2f7ed8`
-- Advanced: `--amber` `#e08a1e`
-- Here we go: `--green` `#1f9e57`
-
-Do not recolour these rungs casually. The progression (neutral, info, warning, go) is the meaning.
-
-### Shape and depth tokens (real)
-| Token | Value | Role |
-|-------|-------|------|
-| `--radius` | `14px` | Standard card / widget radius. |
-| `--shadow` | `0 8px 30px rgba(0,0,0,.45)` | Standard elevation shadow. |
+### Competition colours
+Stored as RGB triples (`--comp-pl` purple, `--comp-ucl` blue, `--comp-fa` red, `--comp-efl` green, `--comp-cs` gold, `--comp-usc` grey) so one hue drives a badge's text and tint, the scoreboard's top band and its wash. Data colours (club kits from ESPN, table zone colours from ESPN's `note.color`) are passed inline as data and are exempt from the token rule.
 
 ---
 
 ## 4. Typography
 
-**Font stack (real):**
-```
--apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif
-```
-System font stack only. No web fonts, no font loading cost. Keep it this way for speed. `-webkit-font-smoothing: antialiased` is on for crisp text on dark backgrounds.
+- **System stack only** (`-apple-system, BlinkMacSystemFont, "SF Pro Text", ...`). No web fonts. SF Pro on the phone carries the broadcast feel through weight and tracking.
+- **Sentence case everywhere.** No all-caps labels. Abbreviations that are football vocabulary stay as they are: FT, HT, PL, UCL, W/D/L, P/GD/Pts.
+- **Tabular numerals** (`font-variant-numeric: tabular-nums`) on every score, minute, countdown, table cell and count.
 
-**Weights in use (real):** 400 (body), 500, 600, 700, 800. 800 is the strong/heading weight (brand name, hero title, card titles, widget heads, category pills). There is no 900.
+| Use | Size / weight |
+|---|---|
+| Scoreboard score | `3rem` / 800, `-.03em` (3.2rem desktop, 2.25rem under 380px) |
+| Scoreboard kick-off time | `2.4rem` / 800 |
+| Page title (Matches, News, Table) | `1.85rem` / 800, `-.025em` (iOS large-title feel) |
+| Section heading | `1.08rem` / 700 |
+| Lead story | `1.22-1.3rem` / 800 |
+| Row title, story title | `.95-1.02rem` / 600-700 |
+| Body | `15px` / 400 |
+| Meta | `.76-.86rem` / 500 |
 
-**Type scale (real, observed across the stylesheet).** Sizes are in `rem` unless noted.
-
-| Use | Size | Weight |
-|-----|------|--------|
-| Hero title | `1.5rem` (mobile `1.25rem`) | 800 |
-| Saga page H1 | `1.6rem` | (default heading) |
-| Europe section heading | `1.3rem` | (default) |
-| Club section head | `1.05rem` | (default) |
-| Card title | `1.02rem` | 700 |
-| Brand name | `0.98rem` | 800 |
-| Saga / timeline title | `0.98rem` | 700 |
-| Body summary | `0.86rem` | 400 |
-| Source, clubs, tags | `0.74`-`0.76rem` | 600 |
-| Pills, labels, badges | `0.62`-`0.68rem` | 800, uppercase, letter-spaced |
-| Live strip label | `0.62rem` | 700, `letter-spacing:1.5px` |
-
-**Line height (real):** body copy uses `1.45`-`1.55`. Titles tighten to `1.2`-`1.32`.
-
-**Letter spacing (real):** small uppercase labels and the brand name use positive tracking (`0.4px` to `2px`). Body text uses none.
-
-**Convention:** heading hierarchy is carried by **weight and size together**, not colour. Most headings stay `--text`; colour is reserved for accents and states.
+Inactive controls (segments, chips, tab bar, back link, "more" links, sources) are **500**; the active one goes to 700. When everything is bold, names and scores lose their punch.
 
 ---
 
-## 5. Spacing & layout
+## 5. Space, shape, depth
 
-**Page shell (real):** `.layout` is `max-width: 1200px`, centred, `padding: 16px`, a two-column CSS grid: `1fr 320px` (main feed plus a 320px right rail), `gap: 18px`. Below `900px` it collapses to a single column and the rail moves below the feed (`order: 2`).
-
-**Spacing rhythm (real, observed):** the app uses a loose 4 / 8 / 12 / 14 / 16 / 18px step. There is no formal token scale.
-
-> **(Proposed)** Introduce a spacing scale as `:root` variables to formalise the rhythm already in use:
-> `--s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px;`
-> Adopt gradually; do not mass-rewrite working rules.
-
-**Feed (real):** `.feed` is a vertical flex column, `gap: 11px`. Cards stack; they are not a multi-column masonry grid. This keeps the newest-first reading order obvious.
-
-**Crest wall (real, Europe page):** `.crestwall` is an auto-fill grid, `minmax(98px, 1fr)`, `gap: 8px`. This is the one place a tile grid is used.
-
-**Sticky chrome (real):** the top bar is `position: sticky; top: 0` with a blurred translucent background (`backdrop-filter: blur(14px)`). On mobile a fixed bottom nav appears; the body reserves `padding-bottom: 70px` so content is never hidden behind it.
-
-**Live strip (real):** a horizontally scrollable row of `.ls-block` cells (next match, last result, form, table position) directly under the top bar.
-
-**Saga timeline (real):** a single left-rail vertical timeline. `.timeline` has a `2px` vertical line via `::before`; each `.tl-row` has a `.tl-dot` coloured by rung, with a glow on the top rung.
+- **Spacing:** 4px base. `--s1 4 / --s2 8 / --s3 12 / --s4 16 / --s5 24 / --s6 32`. Sections are `--s5` apart; page gutter `--s4` on a phone, `--s5` on desktop.
+- **Radius:** `--r-sm 6` (badges, chips' inner bits), `--r-md 10` (inputs, crest tiles), `--r-lg 16` (cards, groups). Pills are `999px`.
+- **Depth: surface lightness plus hairlines.** No drop shadows. The one exception is the scoreboard (section 6).
+- **Touch:** every interactive element is at least 44px tall (chip rows reach it with an invisible `::after`). `-webkit-tap-highlight-color` is off and replaced by real pressed states: rows go to `--bg3`, tiles/boards/chips scale to `.97`.
+- **Layout:** one column on a phone. From 900px: top nav replaces the tab bar, `1fr 340px` main + side column on Home/Matches/News, a centred 760px single column on the match centre and Table.
 
 ---
 
-## 6. Component conventions
+## 6. Components
 
-### News / story card (`.card`, macro `card()`)
-- Surface `--bg2`, `1px` border `--line`, radius `12px`, padding `13px 15px`.
-- **Left colour spine** (`border-left: 3px`) encodes category: transfers gold, injuries red, match-results blue, default dim.
-- **Insider stories** get `.insider-glow`: a blue ring and soft blue outer glow.
-- Structure: meta row (category pill, likelihood meter, insider badge, source-consensus badge, timestamp), then `h2.card-title` link, then optional summary (truncated at 200 chars), then a foot row (source, clubs, player tag).
-- **States:**
-  - Default: subtle, opacity rises in via the `rise` keyframe on load (`translateY(8px)` to settled).
-  - Hover: `translateY(-2px)`, standard shadow, border brightens to `--dim`. Transition `0.15s`.
-  - Title link hover: text turns `--red2`.
-- Card titles are real `<h2>` elements wrapping `<a>` with `target="_blank" rel="noopener"`. Keep `rel="noopener"` on every external link.
+### Scoreboard (`.board`): the shared match grammar
+Used for the Home hero and the match-centre header. A 3px band in the competition colour runs along the top, and the same colour washes down from it (`radial-gradient` of `--comp` at 16%) over a two-stop navy gradient. On a phone it is **edge to edge** (no radius, no side borders): a broadcast header, not a card. Inside: competition and round (sentence case) with a status pill on the right; home crest + name, centre, away crest + name (64px crests); scorers mirrored around a ball icon; the match rail; a foot with venue and date.
+- **Pre-match:** centre is the kick-off time (SAST) and "Today" / "Tomorrow" / "Sat 10 Oct"; the pill counts down ("in 8 days", then "in 1d 4h", "in 3h 12m").
+- **Live:** centre is the score; the pill is red with a pulsing dot and the ticking minute; the board gets a `--live` edge.
+- **Half time:** amber "HT" pill. **Full time:** grey "FT" pill (or ESPN's AET/pens detail); a shoot-out note sits under the score.
+- **Home picks the board** in this order: a match in its live window, a result from the last 30 hours (plus a compact "Next" row under it), the next fixture, the last result.
 
-### Hero (`.hero`)
-The lead story, picked by `pick_hero()` (source consensus, then likelihood, then freshness). Larger surface with a gradient, a red radial wash top-right, a red `.hero-tag` label, a `1.5rem` title, and the same lift-on-hover behaviour. One hero maximum, only on the unfiltered "All" view.
+### Match rail (`.rail`): the signature
+90 minutes as a line (120 if extra time was played). HT tick at 50%. Goals sit where they happened: home side above the line, away side below. **Arsenal goals are filled green, opposition goals hollow**, red cards are small red bars. Live: the line fills `--live` up to the current minute with a pulsing "now" dot. Pre-match: no rail.
 
-### Likelihood meter / ladder (`.meter`, macro `meter()`)
-The signature ranking UI. Four `7px` tall segments (`.seg`, `14px` wide) plus a text label (`em`). Segments fill cumulatively up to the rung index; each "on" segment takes its rung colour (`.s0` grey, `.s1` blue, `.s2` amber, `.s3` green). The label colour matches the rung. Empty segments sit on the `--bg3` track. Segment fill animates over `0.5s`.
+### Status pill (`.pill`)
+`pill-live` (red-deep fill, white text, pulsing dot, minute), `pill-ht` (amber tint), plain (FT, postponed), `pill-soon` (countdown).
 
-Rung order is fixed by config: `Rumour, Developing, Advanced, Here we go`. "Here we go" is the Fabrizio Romano confirmation phrase and is the top, green rung. Do not rename or reorder rungs in CSS independently of `config.LIKELIHOOD_RUNGS`.
+### Live minute
+The snapshot only moves every 30 minutes on Pages, so the minute is computed on the phone: anchor on ESPN's `displayClock` ("67'", "45'+2'") and its `clock_at`, add elapsed whole minutes, cap the extrapolation at 12 minutes so a stale feed can never invent a "45+30'". Re-anchored on every poll. Ticks every 15s without a re-render.
 
-### Rumour-heat rows (`.heat-row`, rail widget)
-A horizontal bar chart: player name, a fill bar coloured by best likelihood (`.hb-rumour` grey through `.hb-here-we-go` green), and a mention count. Bars grow in via the `grow` keyframe. The fill class mirrors the ladder scale, keeping one consistent colour language for "how real is this".
+### Live bar (`.livebar`)
+While a match is live, every screen except Home and that match's centre shows one 44px line under the top bar: pill, "ARS 2–1 CHE", "Match centre". Tapping it opens the match.
 
-### Badges and pills
-- **Category pill** (`.cat-pill`): tiny, uppercase, letter-spaced, `--bg3` background by default; per-category tinted variants (gold/red/blue) use a low-alpha background plus the matching accent text.
-- **Insider badge** (`.insider`): blue-tinted, bordered, "insider" label.
-- **Consensus badge** (`.consensus`): green, shows source count, tooltip lists sources.
-- **Player tag** (`.player-tag`): gold pill linking to the player saga.
-- **Form chips** (`.f`): `18px` squares, win green / draw grey / loss red.
-- Convention: badges are small, uppercase or compact, and use low-alpha tinted backgrounds rather than solid fills, except the active brand red.
+### Recent results strip (`.strip` / `.tile`)
+Horizontally scrolling tiles (112px): opponent crest, W/D/L chip plus Arsenal-first score, short club name ("Brighton", from ESPN's `shortDisplayName`), competition badge and Home/Away. `scroll-padding-inline` keeps the first tile off the screen edge. **Any scroller that contains `.sr-only` text must be `position:relative`**, or the absolutely positioned label escapes the clip, widens the page and mobile Safari/Chrome zoom the whole app out (this happened, see the 2026-10-02 handoff).
 
-### Links and nav
-- Global default: `a { color: inherit; text-decoration: none }`. Links are styled by context, not a global link colour.
-- **Page nav pill** (`.pagelink`): muted by default; hover lifts to `--text` on `--bg3`; **active is solid `--red` with white text and a red glow shadow.**
-- **Tabs** (`.tab`): category filters; muted, bordered; active is solid red. The "rung toggle" tab is the amber exception.
-- **Back link** (`.back`): muted, hover `--red2`.
+### Match rows (`.mrow`)
+Grid: date block (day number 1.15rem/800 over weekday) | crest, short opponent name, competition badge and "Home, Third Round" (ellipsised) | kick-off time, or Arsenal-first score + W/D/L chip, or a live pill. The next fixture's day number is red. Grouped by month (`.month`, sentence case) into `.group` lists. Upcoming vs Results is a segmented control; competitions are chips with counts.
 
-### Competition badge (`.comp`, macro `comp_badge()`)
-Every fixture and result is stamped with the competition it belongs to: `PL`, `UCL`, `FA`, `EFL`, `CS`, `USC`. Compact, uppercase, `34px` minimum width so a column of them lines up. Follows the badge convention above: low-alpha tinted background, matching accent text, matching border. Purple Premier League, blue Champions League, red FA Cup, green Carabao, gold Community Shield, grey Super Cup. The slug comes from `fixtures.COMPS`, so a new competition needs one row there and one `.comp-<slug>` rule here, nothing else.
+### Result chip (`.res`)
+22px tinted square: W `--green-tint` / `--green-text`, D `--grey-tint` / `--grey-text`, L `--red-tint` / `--red-text`. Tinted, never filled. Carries a screen-reader word ("Won"). A zero in the season record fades to 35%.
 
-### Fixture row (`.fx-row`, macro `match_row()`)
-A four-column grid: when (day over time), competition badge, opponent (crest, name, H/A chip), then either a countdown (upcoming) or a score plus a W/D/L form chip (result). Always framed from Arsenal's point of view: the opponent is named, never Arsenal, and the score reads Arsenal-first. Rows are `--bg2` on `--line`, hover slides `2px` right rather than lifting, so a long list stays calm. A live fixture takes a red border and a pulsing `● status`.
+### Match centre tabs
+**Underline tabs** (`.mc-tabs`), sticky under the top bar, deliberately different from the segmented controls elsewhere. Tabs shown depend on the state: pre-match Preview / Line-ups; live Timeline / Line-ups / Stats / Team news; finished Timeline / Line-ups / Stats (Stats only when ESPN sent stats). The tab lives in the URL (`?tab=`), so a live re-render keeps it.
 
-### Next-match card (`.nextcard`)
-One per fixtures page, at the top: competition tag, both crests either side of a kickoff countdown, and a foot line with the date, `SAST` time, venue and days remaining. Reuses the hero's gradient plus red radial wash so the two read as the same family. Goes live-red with a pulsing status when a match is in progress. One focal point only, same rule as the hero.
+### Timeline (`.tl`)
+A centre spine with the minute pill on it; home events to the left (right-aligned, icon nearest the spine), away events to the right. Names are pitch-style surnames ("De Bruyne"), with a second line for the assist, "Penalty", "Own goal" or "X off". **Goal pills:** Arsenal's are green with dark text, the opposition's are hollow (matching the rail markers). Substitutions get a green up / red down arrow icon. Cards are small CSS rectangles (`.card-ico`). HT and FT markers with the score are drawn by our code (`with_markers`), not ESPN's, because ESPN only sends them for some matches. Chronological when finished, **newest first while live**. "Match info" (kick-off SAST, venue, referee, attendance) follows as a `dl`.
 
-### View switch vs filters (`.seg` vs `.tab`)
-Two different gestures must not look identical. **Changing view** (Upcoming / Results) is a segmented control: one `--bg2` container, `--line` border, `3px` padding, red fill on the active segment only. **Filtering** (competition chips, category tabs) stays as separate `.tab` pills. On a phone the filter row scrolls horizontally (`flex-wrap:nowrap; overflow-x:auto`, scrollbar hidden) rather than stacking to three rows, same pattern as `.livestrip`. Chips with a zero count for the active view are hidden, never shown as a dead end.
+### Stats (`.stat`)
+Value | label | value, the larger value bold in `--text`, the smaller in `--muted`. Under it, two bars growing out from the centre, proportional to share. **Arsenal's side is red, the opponent's grey**, whichever end Arsenal are on. Possession is shown as whole percentages. Only drawn when ESPN's summary returns both sides; an all-zero payload means "not started" and hides the tab.
 
-### Month band (`.fx-monthhead`) and record rows (`.rec-row`, `.nu-row`)
-`.fx-monthhead` is the same uppercase, `2px`-tracked, `--dim` label used elsewhere, with a count chip. Bands are separated by `30px` (`24px` on mobile) so a long list reads as months rather than one ribbon. `.nu-row` (Next Up) and `.rec-row` (Season So Far) follow the standard rail-row pattern: full-width link, bottom-border divider, ellipsised name in the flexible middle. A **zero W/D/L chip fades to `opacity:.32`**, because a clean sheet of zero losses must not render as a saturated red alarm.
+### Line-ups pitch (`.pitch`)
+Fixed height (440px), half-pitch markings, keeper nearest the viewer. On a phone the pitch runs to the card edges. Rows come from **positions, never ESPN's `formationPlace`** (`_band()` reduces codes like `CD-L`, `LB`, `AM-R` to G/D/M/F; `test_matchcentre.py` pins it).
+- **Kit colours:** Arsenal discs are `--red-deep` with white numbers. The opponent's disc takes ESPN's `color`, switching to `alternateColor` when the primary is red (Man Utd, Sunderland), and the number colour is whichever of white or `--bg` reads better on it (`kit_colours()` in `matchcentre.py`): sky blue and white kits get dark numbers.
+- **Event badges** on the disc's shoulder: a ball (or a count) for goals, a yellow or red card.
+- **Substituted players keep their kit colour**; a red "↓ 67'" under the name says when they went off. (Until 2026-10-02 the disc went grey, which made most of a finished XI look absent.)
+- Names are surname-only, single line, ellipsised; hyphenated names never split.
+- Headshots: unchanged rules. Only ESPN's declared `athlete.headshot.href`, PNG only, kit fill behind the transparent cut-out, `alt=""` because the name sits underneath, `onerror` restores the number. Sparse coverage is normal.
+- Substitutes are a two-column list: shirt number, full name, goal/card marks, green "↑ 67'" for those who came on.
+- The opponent XI is a collapsible `details`, closed on a phone, open on desktop; the open state survives live re-renders.
 
-### Match centre pitch (`.pitch`, macro `pitch()`)
-A fixed-size lineup graphic, not a form layout. `420px` tall (`330px` on a phone) and capped at `560px` wide so **both XIs render identically regardless of how many rows the formation has**. Half-pitch markings: halfway line and centre circle at the top edge, penalty area at the keeper's end, mow stripes at `--pitch-stripe`. Rows read bottom-up, keeper nearest the viewer.
+### League table (`.ltable`)
+Rank with a 3px zone bar in ESPN's own zone colour (Champions League, relegation...), 22px crest, short name, P, W/D/L (420px and up), GD, Pts (800). Arsenal's row is tinted `--red-tint` and bold. A zone legend sits underneath. Premier League and Champions League league phase switch with a segmented control. Home shows a four-row window around Arsenal.
 
-**Rows come from the players' positions (G, D, M, F), never from ESPN's `formationPlace`.** That field is a slot id, not a sequence, and slicing it into formation bands put Declan Rice in Arsenal's back four. The formation string is shown as a label only. `test_matchcentre.py` pins this.
+### News
+- **Segmented sections:** Arsenal / Others / All / Heat. Search lives behind a search icon in the title row and opens on tap (or stays open while a query or source filter is active).
+- **Morning brief:** plain card, three lines clamped, "Read the full brief" toggle.
+- **Lead story:** the biggest story (source consensus, then likelihood, then insider), 1.3rem/800 headline.
+- **Cards:** kicker (category, `--muted`), likelihood meter, "Insider", "N sources", relative time; headline 1.02rem/700; 200-character summary; source, clubs, player tag (gold, links to the saga).
+- **Filters:** category chips with counts; "Close to done" (amber chip) shows Advanced and Here-we-go only.
+- **Others:** a scrolling crest strip on a phone (a grid on desktop), stories grouped by club.
+- **Heat:** scope chips and sort chips separated by a hairline; amber bars sized by heat (the stage lives only in the meter); the time sits in the card's top row.
 
-**Position codes are not always the bare letter, so they are reduced to a band before use.** The same idea arrives as `D`, `CD`, `CD-L`, `LB` or `RB` depending on the fixture, and as `M`, `DM`, `AM-L`, `LM` or `CM-R` in midfield. Matching on the first letter placed nobody, tripped the "did every starter get a row" guard, and rendered whole XIs as one flat line of eleven. `_band()` drops the side suffix and reads the last letter, mapping `B` to defence. Anything unrecognised returns `""` and still trips the guard, which is the safety net rather than a silent mis-placement.
+### Navigation
+Bottom tab bar on a phone (Home, Matches, News, Table) with one stroked SVG icon set (24px grid, 1.8 stroke); active = white label and red icon. Top nav from 900px with a red underline on the active item.
 
-Shirt discs take `--kit`, set per side from the club's own colour, with Arsenal forced to `--red` so ESPN's off-brand `#e20520` never leaks in. **Two teams must never appear in the same colour.** Names are surname-only, with the leading initial stripped but compound surnames kept intact ("De Bruyne", not "Bruyne").
+### Segmented control vs chips vs tabs
+Three gestures, three looks: **segmented** (`.seg`, switch view, raised `--bg4` segment), **chips** (`.chip`, filter, white fill when active), **underline tabs** (match centre sections).
 
-### Player headshot (`.pl-face`)
-A bonus on the shirt disc, never the layout. Where ESPN declares `athlete.headshot.href` the photo fills the disc and the jersey number hides; every other player keeps the numbered disc unchanged.
-
-**Sparse coverage is the permanent normal state, not a loading state.** Checked live on 2026-09-09: ESPN carried a headshot for 3 of 42 athletes in the Arsenal v Napoli payload and for none of the 22 starters, and roughly one starter per fixture across four other matches. A pitch of mostly numbers with one or two faces is correct. Three rules stop that reading as broken:
-
-- **The disc keeps its `--kit` fill behind the photo.** ESPN's cut-outs are transparent PNGs, so the player reads as a silhouette on his own colour and a photographed disc matches a numbered one in size, brightness and hue. Backing it with `--bg3` instead is wrong: that token already means "substituted off", so a player who lasted ninety minutes looked substituted. A player who genuinely is subbed gets `--bg3` behind the photo plus the existing greyscale, so the two states stay distinct.
-- **Only PNGs are used.** An opaque JPEG would cover the kit colour entirely, so `_headshot()` drops any other extension rather than displaying it wrong.
-- **The URL comes only from the declared field, never built from the athlete id.** `a.espncdn.com/i/headshots/soccer/players/full/<id>.png` 404s for the overwhelming majority of soccer players (19 of 20 real ids from a single fixture), so a generated URL is a broken image on nearly every shirt. If a declared URL fails anyway, an `onerror` handler drops `.has-face` and the number comes straight back.
-
-Sizing is fixed: `box-sizing:border-box` keeps a photographed disc at the same `30px` (`26px` on a phone), so the fixed-height pitch is untouched. The cut-out is scaled to `210%` and anchored high because at `30px` the shoulders would otherwise leave the face unreadable. **The bench stays text-only**: a `20px` avatar on one arbitrary chip read as a decorative bullet rather than information.
-
-### Primary vs reference blocks
-The page's subject gets `.mc-head-lead` (`1.02rem`, `--text`), which outranks the rail's `.widget-head`. Everything that is context, like the opponent XI, keeps the quiet `.78rem` `--dim` head, dims its player names to `--muted`, and sits inside a `<details>` that starts collapsed under 640px. If a page has two instances of the same component, one of them has to be visibly secondary.
-
-### Match timeline (`.timeline-mc`)
-Left rail with the standard `2px` divider, minute in tabular figures so a long list aligns, an icon per event type. **A goal is tinted by who scored**: `--green-tint` for Arsenal, `--red-tint` for the opposition. Green means good news for Arsenal, never just "a goal happened".
-
-### Rail widgets (`.widget`)
-Uniform container: `--bg2`, `--line` border, `--radius`, padding `13px 14px`, a `widget-head` (800 weight, emoji prefix). Widgets: Next Up, Rumour Heat, Done Deals, Injury Room, Premier League mini-table, Season So Far. Rows inside are full-width links with top-border dividers.
+### States
+Every list has an empty state that says what will appear and when ("Line-ups are usually confirmed about an hour before kick-off, around 12:30 SAST on Sat 10 Oct."). Loading uses quiet skeleton blocks. If the snapshot cannot load and nothing is on screen, the error says so and what to do. The top bar shows "Updated Nm ago", turning amber past two hours.
 
 ---
 
-## 7. Content density
+## 7. Content rules
 
-This is a news feed; density and scannability are the point.
-
-- **Newest first, vertical stack.** One column of cards, not a grid. Reading order is time order.
-- **Every card answers four questions at a glance:** what kind of story (category pill + spine colour), how likely (meter), how trusted (source count + insider badge), how fresh (relative timestamp, right-aligned via `margin-left: auto`).
-- **Timestamps are relative** via the `time_ago` filter: `just now`, `Nm ago`, `Nh ago`, `Nd ago`, then falls back to `DD Mon` after a week. Keep this human format; do not show raw ISO timestamps in the feed.
-- **Summaries are truncated** (200 chars in cards) with an ellipsis. The headline does the work; the summary is support.
-- **Tints carry meaning, not decoration.** Gold means transfer, red means injury or urgency, blue means info or insider, green means confirmed. Do not add tints that do not map to one of these meanings.
-- **One hero, then the feed.** Avoid multiple competing focal points on a page.
-- Keep the rail for aggregates (heat, done deals, injuries, table). The main column is for the chronological story stream.
+- Times are SAST (`Africa/Johannesburg`), kick-offs 24-hour ("13:30").
+- Relative time for news ("12m ago", "3h ago", "2d ago", then "6 Sept").
+- Scores read **home first on the scoreboard** (it shows both crests) and **Arsenal first in lists** (rows, tiles), where only the opponent is named.
+- British spelling and football vocabulary: kick-off, line-ups, match centre, defeat, draw.
+- Error and empty copy says what happened and what to do, never apologises.
 
 ---
 
 ## 8. Accessibility baseline
 
-- **Semantic HTML (real and required):** cards are `<article>`, the top bar is `<header>`, nav is `<nav>`, widgets are `<section>` with a heading, the league widget is a real `<table>`. Card titles are `<h2>`. Keep this. Do not replace semantic elements with bare `<div>`s.
-- **Heading order:** maintain a sane hierarchy per page (one H1 of meaning, section H2s). The saga page uses H1; index uses H2 card titles under a hero. Avoid skipping levels when adding sections.
-- **Contrast:** primary text `--text` on `--bg`/`--bg2` is strong. `--muted` (#8b97ad) passes AA comfortably (~6:1). `--dim` was bumped to `#7a8aa3` (2026-06-23) so it now clears 4.5:1 on dark; still reserve it for metadata, and do not put `--dim` text on `--bg3`. `--grey` (#7c889d) is the thinnest margin at ~4.95:1, so don't darken card backgrounds further.
-- **Focus states:** the static build (`docs/style.css`) now has explicit `:focus-visible` outlines on all interactive elements plus a skip link and `.sr-only` labels (added 2026-06-23). The Flask `static/style.css` still relies on default UA focus rings; backport the same block if the desktop app gets more keyboard use.
-  - **(Proposed, recommended)** Add a single visible focus style:
-    ```css
-    a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible {
-      outline: 2px solid var(--red2);
-      outline-offset: 2px;
-    }
-    ```
-- **Hit targets:** the refresh button is `34px`; mobile bottom-nav items are full-flex. Aim for a minimum interactive target of around `40px` on touch where practical. **(Proposed)**
-- **Motion:** several entrance animations exist (`rise`, `grow`, `pulse`). **(Proposed)** Respect reduced motion:
-    ```css
-    @media (prefers-reduced-motion: reduce) {
-      *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
-    }
-    ```
-- **Images:** crest images carry `alt` text and `loading="lazy"` with a monogram fallback on error (real). Keep alt text on any new imagery. **One deliberate exception:** the lineup headshot takes `alt=""`, because the player's surname is rendered directly beneath it and alt text would make a screen reader announce every player twice. Do not "restore" it.
-- **Colour is never the only signal:** likelihood always pairs the colour scale with a text label; form chips show the letter, not just the colour. Keep this pattern: never encode meaning in colour alone.
+- Semantic structure: one `h1` per screen (visually hidden on Home and the match centre, where the scoreboard is the title), `h2` sections, real `table` with `caption` and `abbr` headers, `nav` with `aria-current`.
+- WCAG AA contrast on every text token pair listed above; white text only on `--red-deep`, never on `--red` or `--green`.
+- Visible `:focus-visible` outline on everything; skip link; focus moves to the view on navigation (not on background refreshes).
+- 44px minimum tap targets.
+- Meaning never by colour alone: W/D/L carry letters and screen-reader words, cards and goals have text equivalents, the likelihood meter has its label, the pitch has a hidden per-player sentence ("Havertz, 1 goal, off 78'").
+- `prefers-reduced-motion` turns off all animation (the live pulse included).
+- Crest images are `alt=""` next to the visible club name; the crest helper falls back from ESPN's dark-UI logo to the standard logo to a monogram, never a broken image.
 
 ---
 
 ## 9. Anti-slop rules
 
-- **No em dashes anywhere.** Not in templates, copy, comments, commit messages or this file. Use commas, full stops, colons, semicolons or "and". (The app already uses an en dash `–` only as a score separator, for example `2–1`, which is correct typography for scores and is fine.)
-- **British spelling** in all copy: colour, behaviour, organise, centre.
-- **No new colour literals.** If you need a colour, it is either already a `:root` token or you add one. No `#xxxxxx` buried in a rule.
-- **Do not add a CSS framework or build step.** Plain CSS plus `:root` variables is the contract. No Tailwind, no SCSS, no PostCSS.
-- **No generic AI-dashboard look:** avoid full-bleed purple-to-blue gradients, glassmorphism everywhere, oversized rounded "card soup", and giant empty hero banners with no content. This is a dense news desk, not a SaaS landing page.
-- **Arsenal red is a signal.** Do not flood large surfaces with red. It marks identity, active state and urgency only.
-- **Respect the meaning of the accent colours** (section 3). Do not use gold for a non-transfer thing or green for something that is not confirmed/positive.
-- **Keep the feed a single column.** Do not turn the story stream into a multi-column grid; it breaks chronological scanning.
-- **One hero per page, on the unfiltered view only.** Do not stack multiple hero blocks.
-- **No decorative icons without meaning.** The emoji prefixes map to real domains (fire = heat, tick = done, bandage = injuries). Do not sprinkle decorative ones.
-- **Truncate, do not dump.** Long summaries are clipped on purpose. Do not remove truncation to show full article bodies in the feed.
-- **Every external link keeps `target="_blank" rel="noopener"`.**
-
----
-
-## 10. Token consolidation note (plain CSS, no Tailwind)
-
-The colour layer is already well consolidated: nearly everything routes through the `:root` palette. Two gaps remain, and fixing them keeps theming consistent and makes a future light mode or alternate accent trivial.
-
-1. **Inline tint literals.** Several tints are written as raw `rgba()` of the brand hexes scattered through rules, for example the red wash `rgba(239,1,7,.12)`, gold `rgba(224,169,58,.16)`, blue `rgba(47,126,216,.18)`, green text `#7fe0a6`. These repeat the palette by hand.
-   - **(Proposed)** Promote the recurring tints and accent-text shades to named tokens, for example:
-     ```css
-     :root {
-       --red-wash: rgba(239,1,7,.12);
-       --gold-tint: rgba(224,169,58,.16);
-       --blue-tint: rgba(47,126,216,.18);
-       --green-tint: rgba(31,158,87,.16);
-       --green-text: #7fe0a6;
-       --blue-text: #6fa8e6;
-     }
-     ```
-     Then reference the tokens instead of repeating literals. This is the single highest-value tidy-up.
-
-2. **Club brand colours** (`.club-man-city` and friends) are intentional per-club hexes and do **not** need to become global tokens; they are data, not theme. Leave them as scoped rules.
-
-**Rule going forward:** any colour used in more than one rule must be a `:root` variable. New surfaces, accents and tints are added to `:root` first, then referenced. This keeps the no-build-step plain-CSS approach maintainable and makes re-theming a one-block change.
+- No em dashes anywhere (copy, comments, commits). The en dash is only a score separator ("2–1").
+- No emoji as icons. One SVG icon set.
+- No all-caps eyebrow labels, no explainer paragraphs under controls, no "A · B · C" meta strings.
+- No gradients or colour for decoration. The scoreboard wash is the competition colour, which is information.
+- No new colour literals in rules: add a token.
+- No second UI, no framework, no build step.
+- Every external link keeps `target="_blank" rel="noopener"`.

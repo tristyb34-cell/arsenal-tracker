@@ -1,5 +1,5 @@
-"""Arsenal fixtures, results, form, and the Premier League table via ESPN's
-free public API (no key). Pattern borrowed from the betting app's espn source.
+"""Arsenal fixtures, results, form, and the league tables via ESPN's free public
+API (no key).
 
 Covers every competition Arsenal play in, not just the league: Premier League,
 Champions League, FA Cup, Carabao Cup, Community Shield and the UEFA Super Cup.
@@ -16,38 +16,39 @@ import requests
 
 import db
 
-EPL = "eng.1"
-SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/soccer/{league}/scoreboard"
-STANDINGS = f"https://site.api.espn.com/apis/v2/sports/soccer/{EPL}/standings"
 TEAM = "Arsenal"
-PAGE_CAP = 100  # ESPN truncates a scoreboard response here, without saying so
-FINISHED = {"STATUS_FULL_TIME", "STATUS_FINAL_AET", "STATUS_FINAL_PEN", "STATUS_FT"}
-LIVE = {"STATUS_IN_PROGRESS", "STATUS_FIRST_HALF", "STATUS_SECOND_HALF",
-        "STATUS_HALFTIME", "STATUS_EXTRA_TIME", "STATUS_SHOOTOUT"}
+TEAM_ID = "359"
+# One team schedule across every competition. This replaced per-competition
+# scoreboard slices on 2026-10-02: ESPN began answering any `dates=A-B` range
+# with HTTP 400, the old fetcher swallowed it, and the published fixtures list
+# sat empty from 16 Sep while the log still said "football refreshed".
+SCHEDULE = f"https://site.api.espn.com/apis/site/v2/sports/soccer/all/teams/{TEAM_ID}/schedule"
+STANDINGS = "https://site.api.espn.com/apis/v2/sports/soccer/{league}/standings"
 
-# ESPN league slug, display name, short badge, css slug, how many days to fetch
-# per request. Dense competitions must use narrow slices: ESPN caps a single
-# scoreboard response at 100 events, and anything past that is silently dropped.
+# ESPN league slug, display name, short badge, css slug. Anything else ESPN
+# returns for Arsenal (club.friendly, friendly.emirates_cup) is pre-season and
+# deliberately left out of the season record.
 COMPS = [
-    ("eng.1", "Premier League", "PL", "pl", 45),
-    ("uefa.champions", "Champions League", "UCL", "ucl", 45),
-    ("eng.fa", "FA Cup", "FA", "fa", 60),
-    ("eng.league_cup", "Carabao Cup", "EFL", "efl", 60),
-    ("eng.charity", "Community Shield", "CS", "cs", 90),
-    ("uefa.super_cup", "Super Cup", "USC", "usc", 90),
+    ("eng.1", "Premier League", "PL", "pl"),
+    ("uefa.champions", "Champions League", "UCL", "ucl"),
+    ("eng.fa", "FA Cup", "FA", "fa"),
+    ("eng.league_cup", "Carabao Cup", "EFL", "efl"),
+    ("eng.charity", "Community Shield", "CS", "cs"),
+    ("uefa.super_cup", "Super Cup", "USC", "usc"),
 ]
+COMP_BY_LEAGUE = {c[0]: c for c in COMPS}
 COMP_ORDER = {c[1]: i for i, c in enumerate(COMPS)}
+
+# A kicked-off match the feed has not flagged live yet stays on the fixtures
+# list for this long, rather than vanishing until ESPN calls it finished.
+GRACE = timedelta(hours=3)
 
 
 def _get(url, params=None):
-    # ESPN 403s on browser-spoofed UAs (started 2026-08-04). Plain requests UA works.
+    # ESPN 403'd browser-spoofed UAs from 2026-08-04. Plain requests UA works.
     r = requests.get(url, params=params or {}, timeout=15)
     r.raise_for_status()
     return r.json()
-
-
-def _ymd(dt):
-    return dt.strftime("%Y%m%d")
 
 
 def _season_start(now):
@@ -57,84 +58,88 @@ def _season_start(now):
     return datetime(year, 7, 1, tzinfo=timezone.utc)
 
 
-def _arsenal_events(days_ahead=330):
-    """Collect Arsenal fixtures across every competition, this season only."""
-    now = datetime.now(timezone.utc)
-    start = _season_start(now)
-    end = min(now + timedelta(days=days_ahead),
-              _season_start(now) + timedelta(days=365))
+def _arsenal_events():
+    """Every competitive Arsenal match this season, results and fixtures.
 
+    Raises if ESPN fails or returns nothing, so refresh() keeps the last good
+    cache instead of overwriting it with an empty season."""
+    start = _season_start(datetime.now(timezone.utc))
     seen = {}
-    for league, comp_name, comp_code, comp_slug, slice_days in COMPS:
-        cursor = start
-        while cursor <= end:
-            chunk_end = min(cursor + timedelta(days=slice_days), end)
-            _collect(league, comp_name, comp_code, comp_slug, cursor, chunk_end, seen)
-            cursor = chunk_end + timedelta(days=1)
+    for params in ({}, {"fixture": "true"}):  # results, then upcoming
+        for e in _get(SCHEDULE, params).get("events", []):
+            comp = COMP_BY_LEAGUE.get((e.get("league") or {}).get("slug", ""))
+            ev = _parse_event(e, comp) if comp else None
+            if ev and datetime.fromisoformat(ev["kickoff"]) >= start:
+                seen[ev["id"]] = ev
+    if not seen:
+        raise RuntimeError("ESPN schedule returned no competitive Arsenal matches")
+    return sorted(seen.values(), key=lambda x: x["kickoff"])
 
-    out = list(seen.values())
-    out.sort(key=lambda x: x["kickoff"])
-    return out
 
-
-def _collect(league, comp_name, comp_code, comp_slug, start, end, seen):
-    """Fetch one date range, and split it if ESPN hit its response cap.
-
-    ESPN silently truncates a scoreboard response at PAGE_CAP events. A busy cup
-    round is enough to blow past that and quietly drop the Arsenal tie, which is
-    how the Carabao third round went missing. If a window comes back full, halve
-    it and go again rather than trusting a suspiciously round number."""
+def _parse_event(e, comp):
+    league, comp_name, comp_code, comp_slug = comp
     try:
-        data = _get(SCOREBOARD.format(league=league),
-                    {"dates": f"{_ymd(start)}-{_ymd(end)}"})
-    except Exception:
-        return
-    events = data.get("events", [])
-    if len(events) >= PAGE_CAP and (end - start).days > 1:
-        mid = start + (end - start) / 2
-        _collect(league, comp_name, comp_code, comp_slug, start, mid, seen)
-        _collect(league, comp_name, comp_code, comp_slug, mid + timedelta(days=1), end, seen)
-        return
-    for e in events:
-        if TEAM not in e.get("name", ""):
-            continue
-        ev = _parse_event(e, comp_name, comp_code, comp_slug)
-        if ev:
-            ev["league"] = league
-            seen[ev["id"]] = ev
-
-
-def _parse_event(e, comp_name, comp_code, comp_slug):
-    try:
-        comp = e["competitions"][0]
-        cs = comp["competitors"]
-        home = next(t for t in cs if t["homeAway"] == "home")
-        away = next(t for t in cs if t["homeAway"] == "away")
-        status = comp["status"]["type"]["name"]
+        c = e["competitions"][0]
+        home = next(t for t in c["competitors"] if t["homeAway"] == "home")
+        away = next(t for t in c["competitors"] if t["homeAway"] == "away")
+        st = c["status"]
         ko = datetime.fromisoformat(e["date"].replace("Z", "+00:00"))
     except (KeyError, IndexError, StopIteration, ValueError):
         return None
+    stype = st.get("type") or {}
     return {
-        "id": e.get("id", ko.isoformat()),
+        "id": str(e.get("id", ko.isoformat())),
+        "league": league,
         "url": _event_url(e),
         "kickoff": ko.isoformat(),
         "comp": comp_name,
         "comp_code": comp_code,
         "comp_slug": comp_slug,
-        "round": (comp.get("notes") or [{}])[0].get("headline", "") if comp.get("notes") else "",
-        "venue": (comp.get("venue") or {}).get("fullName", ""),
+        "round": _round(e),
+        "note": ((c.get("notes") or [{}])[0] or {}).get("headline", ""),
+        "venue": (c.get("venue") or {}).get("fullName", ""),
         "home": home["team"]["displayName"],
         "away": away["team"]["displayName"],
         "home_short": home["team"].get("abbreviation", ""),
         "away_short": away["team"].get("abbreviation", ""),
-        "home_logo": home["team"].get("logo", ""),
-        "away_logo": away["team"].get("logo", ""),
-        "home_goals": _maybe_int(home.get("score")),
-        "away_goals": _maybe_int(away.get("score")),
-        "finished": status in FINISHED,
-        "live": status in LIVE,
-        "status": comp["status"]["type"].get("shortDetail", ""),
+        # "Brighton" rather than "Brighton & Hove Albion" where space is tight
+        "home_name": home["team"].get("shortDisplayName") or home["team"]["displayName"],
+        "away_name": away["team"].get("shortDisplayName") or away["team"]["displayName"],
+        "home_logo": _logo(home["team"]),
+        "away_logo": _logo(away["team"]),
+        "home_goals": _score(home.get("score")),
+        "away_goals": _score(away.get("score")),
+        "finished": bool(stype.get("completed")),
+        "live": stype.get("state") == "in",
+        "status": stype.get("shortDetail", ""),
+        "status_name": stype.get("name", ""),
+        "clock": st.get("clock"),
+        "display_clock": st.get("displayClock", ""),
+        "period": st.get("period"),
+        "clock_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+def _round(e):
+    """Cup ties carry the round in seasonType ("Third Round", "League Phase").
+    League games carry the season name there instead, which is not a round."""
+    name = (e.get("seasonType") or {}).get("name", "") or ""
+    return "" if name[:4].isdigit() else name
+
+
+def _logo(team):
+    for lg in team.get("logos") or []:
+        if "default" in (lg.get("rel") or []) and lg.get("href"):
+            return lg["href"]
+    return team.get("logo", "") or ((team.get("logos") or [{}])[0] or {}).get("href", "")
+
+
+def _score(v):
+    """The schedule endpoint sends `{"value": 3.0, "displayValue": "3"}`, the
+    scoreboard sends a bare "3", and an unplayed match sends nothing."""
+    if isinstance(v, dict):
+        v = v.get("displayValue", v.get("value"))
+    return _maybe_int(v)
 
 
 def _event_url(e):
@@ -148,7 +153,7 @@ def _event_url(e):
 
 def _maybe_int(v):
     try:
-        return int(v)
+        return int(float(v))
     except (TypeError, ValueError):
         return None
 
@@ -169,6 +174,7 @@ def _decorate(ev):
     ev["opponent"] = ev["away"] if ars_home else ev["home"]
     ev["opponent_short"] = (ev["away_short"] if ars_home else ev["home_short"]) or ev["opponent"][:3].upper()
     ev["opponent_logo"] = ev["away_logo"] if ars_home else ev["home_logo"]
+    ev["opponent_name"] = (ev.get("away_name") if ars_home else ev.get("home_name")) or ev["opponent"]
     ev["home_away"] = "H" if ars_home else "A"
     ev["result"] = _result_for_arsenal(ev)
     if ev["home_goals"] is not None and ev["away_goals"] is not None:
@@ -179,19 +185,29 @@ def _decorate(ev):
     return ev
 
 
-def _standings_rows():
-    data = _get(STANDINGS)
-    entries = _find_entries(data)
+def _standings_rows(league="eng.1"):
+    entries = _find_entries(_get(STANDINGS.format(league=league)))
     table = []
     for e in entries or []:
         stats = {s["name"]: s.get("displayValue") for s in e.get("stats", [])}
+        t = e["team"]
         table.append({
             "rank": _maybe_int(stats.get("rank")),
-            "team": e["team"]["displayName"],
-            "team_short": e["team"].get("abbreviation", ""),
+            "team": t["displayName"],
+            "team_short": t.get("abbreviation", ""),
+            "short_name": t.get("shortDisplayName") or t["displayName"],
+            "logo": _logo(t),
             "played": stats.get("gamesPlayed"),
+            "w": stats.get("wins"),
+            "d": stats.get("ties"),
+            "l": stats.get("losses"),
+            "gf": stats.get("pointsFor"),
+            "ga": stats.get("pointsAgainst"),
             "points": stats.get("points"),
             "gd": stats.get("pointDifferential") or stats.get("goalDifference"),
+            # qualification / relegation band, coloured by ESPN
+            "zone": (e.get("note") or {}).get("description", ""),
+            "zone_colour": (e.get("note") or {}).get("color", ""),
         })
     table.sort(key=lambda r: r["rank"] or 99)
     return table
@@ -214,22 +230,19 @@ def _find_entries(o):
     return None
 
 
-def build_snapshot():
-    """Fetch everything and assemble the dashboard's football snapshot."""
-    events = [_decorate(e) for e in _arsenal_events()]
-    now = datetime.now(timezone.utc)
-
+def assemble(events, table, ucl_table=None, now=None):
+    """Shape decorated events and tables into the dashboard's football block."""
+    now = now or datetime.now(timezone.utc)
+    events = sorted(events, key=lambda x: x["kickoff"])
     past = [e for e in events if e["finished"]]
     live = [e for e in events if e["live"]]
     upcoming = [e for e in events
                 if not e["finished"] and not e["live"]
-                and datetime.fromisoformat(e["kickoff"]) >= now]
+                and datetime.fromisoformat(e["kickoff"]) >= now - GRACE]
 
     last = past[-1] if past else None
     nxt = upcoming[0] if upcoming else None
     form = [r for r in (_result_for_arsenal(e) for e in past[-5:]) if r]
-
-    table = _standings_rows()
     arsenal_row = next((r for r in table if r["team"] == TEAM), None)
 
     return {
@@ -242,8 +255,21 @@ def build_snapshot():
         "comps": _comp_summary(past, upcoming),
         "table": table,
         "arsenal_row": arsenal_row,
+        "ucl_table": ucl_table or [],
         "is_matchday": _is_matchday(nxt, live, now),
     }
+
+
+def build_snapshot():
+    """Fetch everything and assemble the dashboard's football snapshot."""
+    events = [_decorate(e) for e in _arsenal_events()]
+    ucl = []
+    if any(e["league"] == "uefa.champions" for e in events):
+        try:
+            ucl = _standings_rows("uefa.champions")
+        except Exception:
+            ucl = []  # the league table still matters more than this one
+    return assemble(events, _standings_rows("eng.1"), ucl)
 
 
 def _comp_summary(past, upcoming):
@@ -275,13 +301,52 @@ def _is_matchday(nxt, live, now):
     return ko.date() == now.date()
 
 
+def apply_live(snap, event_id, state):
+    """Patch one match's status in the cached snapshot from a fresher source.
+
+    The fixtures cache is rebuilt every 90 minutes, which is a whole match. The
+    match centre summary is polled every minute while a game is on, so its
+    header is the best truth for score and clock; export.py feeds it back here
+    so Home, Matches and the match centre never disagree."""
+    if not snap or not state:
+        return snap
+    events = {}
+    for bucket in ("results", "fixtures"):
+        for e in snap.get(bucket) or []:
+            events[str(e["id"])] = e
+    live = snap.get("live_match")
+    if live:
+        events.setdefault(str(live["id"]), live)
+    ev = events.get(str(event_id))
+    if not ev:
+        return snap
+    ev.update({
+        "live": state["state"] == "in",
+        "finished": bool(state["completed"]),
+        "home_goals": state["home_goals"],
+        "away_goals": state["away_goals"],
+        "status": state.get("detail") or ev.get("status", ""),
+        "status_name": state.get("name", ""),
+        "clock": state.get("clock"),
+        "display_clock": state.get("display_clock", ""),
+        "period": state.get("period"),
+        "clock_at": state.get("clock_at") or ev.get("clock_at"),
+    })
+    _decorate(ev)
+    patched = assemble([_decorate(dict(e)) for e in events.values()],
+                       snap.get("table") or [], snap.get("ucl_table"))
+    keep = {k: v for k, v in snap.items() if k.startswith("_")}
+    return {**patched, **keep}
+
+
 def refresh(conn=None, max_age_minutes=None):
     """Build the snapshot and cache it. Safe to call every scrape.
 
     The scraper now runs every 30 minutes rather than four times a day, and each
-    build makes several sliced ESPN requests. Fixtures and league tables do not
-    change that fast, so skip the rebuild while the cache is still warm. Pass
-    max_age_minutes=0 to force a refresh."""
+    build makes several ESPN requests. Fixtures and league tables do not change
+    that fast, so skip the rebuild while the cache is still warm. Pass
+    max_age_minutes=0 to force a refresh. On any failure the previous cache is
+    left exactly as it was."""
     own = conn is None
     if own:
         ctx = db.get_conn()
@@ -333,4 +398,4 @@ if __name__ == "__main__":
               (snap["next_match"] or {}).get("home"), "v", (snap["next_match"] or {}).get("away"))
         print("form:", "".join(snap["form"]))
         print("fixtures:", len(snap["fixtures"]), " results:", len(snap["results"]),
-              " table rows:", len(snap["table"]))
+              " table rows:", len(snap["table"]), " ucl rows:", len(snap["ucl_table"]))

@@ -414,8 +414,11 @@ def run():
         if "error" in fx:
             print(f"  -> fixtures refresh failed: {fx['error']}")
         else:
+            # counts, not just "refreshed": an empty season once logged as success
             nm = fx.get("next_match")
-            print(f"  -> football refreshed (next: {nm['away'] if nm else 'TBA'})")
+            print(f"  -> football: {len(fx.get('results') or [])} results, "
+                  f"{len(fx.get('fixtures') or [])} fixtures "
+                  f"(next: {nm['home'] + ' v ' + nm['away'] if nm else 'TBA'})")
         brief.refresh_if_stale(conn)
         print("  -> morning brief refreshed")
 

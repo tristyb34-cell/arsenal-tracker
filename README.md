@@ -4,16 +4,60 @@ A personal localhost newsroom for everything Arsenal plus a Europe-wide transfer
 desk. Scrapes a tiered set of verified feeds 4x a day and serves a filterable
 two-page dashboard at **http://127.0.0.1:5057**.
 
-## Pages
+## Screens
 
-- **Arsenal** (`/`) — Broadcast Dark command centre: top-story hero, morning
-  brief, clustered feed with segmented likelihood meters and source-consensus,
-  plus a right rail (PL table, rumour heat, done deals, injury room) and a live
-  football strip (next match / last result / form / table).
-- **Europe / Other Clubs** (`/europe`) — transfer desk: a club crest wall, then
-  transfers grouped by club, each with its likelihood rung.
-- **Saga** (`/saga/<player>`) — per-player transfer timeline showing the
-  likelihood climbing (or stalling) over time.
+One app, served two ways (see "One UI, two front doors" below). Bottom tab bar on
+a phone, top nav on desktop:
+
+- **Home** (`#/`): the match first. A scoreboard card for the next fixture (kick-off
+  in SAST, countdown) that becomes a live score card with a ticking minute on
+  matchday and a result card for 30 hours afterwards. Then recent results, the
+  Premier League around Arsenal, top stories, injuries and team news.
+- **Matches** (`#/matches`): every Arsenal game in every competition, upcoming and
+  results, competition chips, grouped by month. Every row opens the match centre.
+- **Match centre** (`#/match/<id>`): scoreboard with scorers and the match rail
+  (90 minutes as a line, goals where they happened), then tabs: Timeline (goals,
+  cards, subs; newest first while live), Line-ups (formation pitch, kit colours,
+  goal/card badges, sub minutes, bench), Stats (possession, shots, on target,
+  corners, fouls, offsides, cards, saves) and Preview / Team news before kick-off.
+- **News** (`#/news`, `#/news/others`, `#/news/all`, `#/heat`, `#/saga/<player>`): the
+  Arsenal feed, other clubs' transfer desk, everything combined, rumour heat and
+  per-player sagas.
+- **Table** (`#/table`): Premier League, plus the Champions League league phase.
+
+Design rules live in `DESIGN.md`.
+
+## Football data (ESPN, free, no key)
+
+- `fixtures.py` reads Arsenal's whole season in two calls:
+  `soccer/all/teams/359/schedule` (results) and `...?fixture=true` (upcoming).
+  Friendlies are filtered out. Until 2026-10-02 it sliced per-competition
+  scoreboards by date range; ESPN started answering any `dates=A-B` range with
+  HTTP 400, the error was swallowed, and the fixtures list was empty from 16 Sep
+  while the log said "football refreshed". It now raises instead, keeps the last
+  good cache, and the scrape log prints result and fixture counts.
+- `matchcentre.py` shapes ESPN's match summary: status and clock, scorers (pens and
+  own goals marked; `keyEvents.team` is the side that benefited), the timeline,
+  team stats, line-ups with kit colours and per-player badges. Cached per match in
+  `kv_cache` (`SCHEMA` busts old shapes).
+- `export.py` writes `docs/data/snapshot.json`, one `docs/data/match/<id>.json` per
+  result plus the live and next match, and `docs/data/sagas.json`. While a match
+  is in its window it patches the live score and clock into the fixtures block.
+- During a match the phone also polls ESPN's summary itself every 30 seconds
+  (ESPN allows cross-origin requests) and ticks the minute between polls, because
+  the published snapshot only moves every 30 minutes. `parseSummary()` in
+  `docs/app.js` mirrors `matchcentre.py`.
+- `live_alerts.py` (launchd, every minute) sends Telegram alerts for the XI,
+  kick-off, goals, red cards, HT and FT.
+
+## One UI, two front doors
+
+`docs/` (`index.html`, `app.js`, `style.css`, `sw.js`) is the only UI. GitHub Pages
+serves it with the pushed static data; Flask (`app.py`, 127.0.0.1:5057) serves the
+same files and builds the JSON live from `arsenal.db`, plus a Refresh button
+(`POST /refresh` runs a scrape). Old desktop URLs (`/fixtures`, `/match/<id>`,
+`/europe`, `/all`, `/heat`, `/saga/<p>`) redirect to the matching screen. The Jinja
+templates were removed on 2026-10-02 so the desktop and phone can no longer drift.
 
 ## v3 intelligence layer
 
@@ -21,8 +65,8 @@ two-page dashboard at **http://127.0.0.1:5057**.
   card shows "N sources" (consensus = credibility).
 - **Player extraction** (`enrich.py`) — claude names the player in each transfer
   item, powering sagas, the heat leaderboard, and the deals ledger.
-- **Football** (`fixtures.py`) — Arsenal fixtures/results/form + PL table via
-  ESPN's free API. Degrades gracefully in the off-season.
+- **Football** (`fixtures.py`, `matchcentre.py`): every Arsenal match in every
+  competition, match centres, PL and UCL tables via ESPN's free API.
 - **Morning brief** (`brief.py`) — claude writes a short daily summary, cached.
 - **Native alerts** (`alerts.py`) — macOS notification on a confirmed "Here we
   go" or an insider Arsenal post (deduped, fires once per item).
@@ -44,9 +88,8 @@ arsenal.db  ->  export.py  ->  docs/data/snapshot.json  --git push-->  GitHub Pa
 - **export.py** dumps the DB (via the same `db.py` queries) to one
   `docs/data/snapshot.json` (~712 KB, ~177 KB gzipped).
 - **docs/** is a static SPA (`index.html` + `app.js` + `style.css`) that fetches
-  that JSON and renders all five views client-side, reusing the exact CSS. Hash
-  routing (`#/`, `#/europe`, `#/all`, `#/heat`, `#/saga/<player>`) so refresh
-  never 404s.
+  that JSON and renders every screen client-side. Hash routing so refresh never
+  404s.
 - **docs/sw.js** is network-first for the data (always fresh online, cached
   fallback offline) and cache-first for the app shell.
 - **run_scrape.sh** runs `export.py` and `git push`es the fresh snapshot after
@@ -191,9 +234,13 @@ launchctl list | grep arsenal
 | `db.py` | SQLite schema + queries |
 | `scrape.py` | Fetch + filter + dedupe + categorise + store |
 | `categorise.py` | Keyword rules + claude CLI fallback |
-| `app.py` | Flask dashboard |
+| `app.py` | Flask: serves `docs/` plus live JSON |
+| `fixtures.py` | ESPN schedule, results, tables |
+| `matchcentre.py` | ESPN match summary shaping (scorers, timeline, stats, line-ups) |
+| `export.py` | Writes `docs/data/` for Pages |
+| `live_alerts.py` | Telegram match alerts |
 | `probe_feeds.py` | Empirical feed health checker |
-| `templates/index.html`, `static/style.css` | Dashboard UI |
+| `docs/` | The app (HTML, JS, CSS, service worker, data) |
 | `arsenal.db` | The data (created on first run) |
 | `logs/` | scrape + launchd logs |
 
