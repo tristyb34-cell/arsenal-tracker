@@ -90,8 +90,12 @@ arsenal.db  ->  export.py  ->  docs/data/snapshot.json  --git push-->  GitHub Pa
 - **docs/** is a static SPA (`index.html` + `app.js` + `style.css`) that fetches
   that JSON and renders every screen client-side. Hash routing so refresh never
   404s.
-- **docs/sw.js** is network-first for the data (always fresh online, cached
-  fallback offline) and cache-first for the app shell.
+- **docs/sw.js** is network-first for everything, shell and data (always fresh
+  online, cached fallback offline; the shell falls back to cache after 4s of no
+  answer). A new sw.js activates at once and `app.js` reloads the page once on
+  `controllerchange`, and it checks for a new sw.js every time the app is
+  resumed, so the installed phone app never needs a manual update. Bump `CACHE`
+  in sw.js whenever the shell changes: that is what an already-open app notices.
 - **run_scrape.sh** runs `export.py` and `git push`es the fresh snapshot after
   every scrape, so the live site updates 4x/day automatically.
 - Live: **https://tristyb34-cell.github.io/arsenal-tracker/** — open on the phone,
@@ -211,7 +215,8 @@ Sky Transfer Centre, Football Italia (Serie A), plus the two insiders above.
 
 Two launchd agents (in `~/Library/LaunchAgents/`):
 
-- `com.arsenal.tracker.scrape` — runs `run_scrape.sh` every 30 minutes (`StartInterval`)
+- `com.arsenal.tracker.scrape` — runs `run_scrape.sh` at :00 and :30 every hour
+  (`StartCalendarInterval`, Minute 0 and 30)
 - `com.arsenal.tracker.app` — keeps the dashboard alive (RunAtLoad + KeepAlive)
 
 ```bash
@@ -250,8 +255,11 @@ launchctl list | grep arsenal
   False for general feeds so the relevance filter applies).
 - **Adjust categories:** edit `CATEGORIES` keyword lists in `config.py`. They are
   matched on word boundaries and title hits count double (`TITLE_WEIGHT`).
-- **Change schedule:** edit `StartInterval` in the scrape plist. It was four fixed
-  times (08/11/14/17), which left a 15-hour blackout from 17:00 to 08:00 and an
-  average 5.6-hour lag from publication to appearing. `StartInterval` also fires
-  on wake, so a sleeping Mac catches up immediately.
+- **Change schedule:** edit `StartCalendarInterval` in the scrape plist. It was
+  four fixed times (08/11/14/17), which left a 15-hour blackout from 17:00 to
+  08:00 and an average 5.6-hour lag from publication to appearing. Do NOT go back
+  to `StartInterval`: on 5 Oct 2026 every `StartInterval` agent on this Mac froze
+  (launchd showed `pended nondemand spawn = interval`, runs stuck, last exit 0),
+  so the phone app sat 8 days stale until 13 Oct. Calendar intervals kept firing.
+  A missed calendar run still fires on wake, so a sleeping Mac catches up.
 - **Change port:** edit `PORT` in `config.py`.

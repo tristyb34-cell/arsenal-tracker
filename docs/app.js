@@ -1277,9 +1277,15 @@
     if (!(r.parts[0] === "match" && r.params.tab)) window.scrollTo(0, 0);
     route({ focus: !(r.parts[0] === "match" && r.params.tab) });
   });
-  // coming back to the app (unlocking the phone, switching apps) fetches straight away
+  // coming back to the app (unlocking the phone, switching apps) fetches straight away,
+  // and asks for a new sw.js: iOS resumes a suspended home-screen app without reloading
+  // the page, so without this a resumed app would never look for a new version
   document.addEventListener("visibilitychange", function () {
-    if (document.visibilityState === "visible" && DATA && Date.now() - (Date.parse(DATA.generated_at) || 0) > 60000) load();
+    if (document.visibilityState !== "visible") return;
+    if (DATA && Date.now() - (Date.parse(DATA.generated_at) || 0) > 60000) load();
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.getRegistration().then(function (reg) { if (reg) return reg.update(); }).catch(function () {});
+    }
   });
   el("refresh").addEventListener("click", function () {
     var b = el("refresh");
@@ -1291,7 +1297,17 @@
       load();
     });
   });
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(function () {});
+  if ("serviceWorker" in navigator) {
+    // A new sw.js takes control at once (skipWaiting + clients.claim); reload once so
+    // this open runs the new code rather than the next one. Not when the very first
+    // install claims the page (nothing to replace), and only ever once per page.
+    var hadController = !!navigator.serviceWorker.controller, reloading = false;
+    navigator.serviceWorker.addEventListener("controllerchange", function () {
+      if (hadController && !reloading) { reloading = true; location.reload(); }
+      hadController = true;
+    });
+    navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }).catch(function () {});
+  }
 
   // every minute while a match is in its window, every five otherwise
   setInterval(function () { if (currentEvent()) load(); }, 60000);
