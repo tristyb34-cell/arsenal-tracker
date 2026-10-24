@@ -14,24 +14,36 @@ Alerts, and deliberately nothing else:
 
 No yellow cards, no substitutions, no "kicking off soon" nagging.
 Sent keys are recorded in kv_cache so a restart cannot double-send.
+
+With config.LINEUP_TAKES on, the lineup alert also carries a Gooner take
+(lineup_take.py). Claude can take two minutes and launchd never starts a run
+while the last one is still going, so the take is written by a detached worker
+(`live_alerts.py --lineup-take <job>`) and this run carries on with the goals.
 """
 
 import json
 import os
 import random
+import subprocess
 import sys
+import tempfile
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.expanduser("~/admin/scripts"))
 
+import config  # noqa: E402
 import db  # noqa: E402
 import fixtures  # noqa: E402
+import lineup_take  # noqa: E402
 import matchcentre  # noqa: E402
 from telegram_notify import notify  # noqa: E402
 
 TEAM = "Arsenal"
 WINDOW_BEFORE = timedelta(minutes=75)   # covers the lineup drop
 WINDOW_AFTER = timedelta(minutes=180)   # covers stoppages and extra time
+# A take still unsent this long after the lineup was claimed means its worker
+# died: the next run sends the plain XI instead. Claude gets 120s of this.
+TAKE_RESCUE_AFTER = timedelta(minutes=4)
 
 
 def current_match(snap, now):
@@ -189,6 +201,100 @@ def build_alerts(event, data, state, seen):
     return out
 
 
+def _take_key(event):
+    return f"lineup_take:{event['id']}"
+
+
+def _move(conn, key, old, new):
+    """Move a lineup take from state `old` to `new` (None = not yet claimed).
+
+    True for exactly one caller even when runs overlap, because the check and
+    the write are one statement. Committed at once: get_conn() otherwise holds
+    the write until its block ends."""
+    now = datetime.now(timezone.utc).isoformat()
+    if old is None:
+        cur = conn.execute("INSERT INTO kv_cache (key, value, updated_at) VALUES (?, ?, ?) "
+                           "ON CONFLICT(key) DO NOTHING", (key, new, now))
+    else:
+        cur = conn.execute("UPDATE kv_cache SET value = ?, updated_at = ? WHERE key = ? AND value = ?",
+                           (new, now, key, old))
+    conn.commit()
+    return cur.rowcount == 1
+
+
+def _send_claimed(conn, key, text):
+    """Send a pending lineup unless someone else already is. pending -> sending
+    -> sent; a failed send goes back to pending for the next run to rescue."""
+    if not _move(conn, key, "pending", "sending"):
+        return False
+    try:
+        notify(text)
+    except Exception:
+        _move(conn, key, "sending", "pending")
+        raise
+    _move(conn, key, "sending", "sent")
+    return True
+
+
+def _spawn_take(event, data, plain):
+    """Start the take worker in its own session, so launchd neither waits for
+    it nor kills it when this run exits."""
+    try:
+        fd, path = tempfile.mkstemp(prefix="lineup-take-", suffix=".json")
+        with os.fdopen(fd, "w") as f:
+            json.dump({"event": event, "data": data, "plain": plain}, f)
+        here = os.path.dirname(os.path.abspath(__file__))
+        subprocess.Popen([sys.executable, os.path.join(here, "live_alerts.py"), "--lineup-take", path],
+                         stdin=subprocess.DEVNULL, cwd=here, start_new_session=True)
+        return True
+    except Exception:
+        return False
+
+
+def take_over_lineup(conn, event, data, alerts, seen):
+    """Pull the plain lineup alert out of this run and hand it to a worker.
+
+    The lineup key is claimed and recorded before anything slow, so neither an
+    overlapping run nor the next one can send a second lineup. If the worker
+    cannot start, or never reports back within TAKE_RESCUE_AFTER, the plain XI
+    goes out from here instead: team news is never lost to a stuck Claude."""
+    key = _take_key(event)
+    rest = [(k, t) for k, t in alerts if k != "lineup"]
+    plain = dict(alerts).get("lineup")
+    if plain:
+        seen.add("lineup")
+        remember(conn, event["id"], seen)
+        if _move(conn, key, None, "pending") and not _spawn_take(event, data, plain):
+            _send_claimed(conn, key, plain)
+        return rest
+
+    row = db.kv_get(conn, key)
+    if row and row["value"] == "pending":
+        age = datetime.now(timezone.utc) - datetime.fromisoformat(row["updated_at"])
+        if age > TAKE_RESCUE_AFTER:
+            plain = dict(build_alerts(event, data, None, set())).get("lineup")
+            if plain:
+                _send_claimed(conn, key, plain)
+    return rest
+
+
+def deliver_lineup(job_path):
+    """The worker: build the lineup message with its take and send it, unless
+    a later run has already rescued it with the plain XI."""
+    with open(job_path) as f:
+        job = json.load(f)
+    os.remove(job_path)
+    event, plain = job["event"], job["plain"]
+    try:
+        text = lineup_take.message(event, job["data"], plain)
+    except Exception as e:
+        print(f"lineup take failed, sending the plain XI: {e!r}")
+        text = plain
+    with db.get_conn() as conn:
+        if _send_claimed(conn, _take_key(event), text):
+            print(f"sent lineup{' with take' if text != plain else ''} for {event['home']} v {event['away']}")
+
+
 def _refresh_snapshot():
     try:
         import export
@@ -217,6 +323,8 @@ def main():
         state = matchcentre.live_state(data)
         seen = sent_keys(conn, event["id"])
         alerts = build_alerts(event, data, state, seen)
+        if config.LINEUP_TAKES:
+            alerts = take_over_lineup(conn, event, data, alerts, seen)
         for key, text in alerts:
             notify(text)
             seen.add(key)
@@ -231,4 +339,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if sys.argv[1:2] == ["--lineup-take"]:
+        deliver_lineup(sys.argv[2])
+    else:
+        main()

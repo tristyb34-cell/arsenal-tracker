@@ -49,6 +49,12 @@ Design rules live in `DESIGN.md`.
   `docs/app.js` mirrors `matchcentre.py`.
 - `live_alerts.py` (launchd, every minute) sends Telegram alerts for the XI,
   kick-off, goals, red cards, HT and FT.
+- `lineup_take.py` adds a Gooner take under the XI (changes from the last game,
+  our shape, the opponent, a prediction) from ESPN plus 48 hours of tracker news,
+  written by `claude -p` (Opus). Behind `config.LINEUP_TAKES`, off by default. A
+  detached worker writes it so goal alerts never wait; if Claude fails or takes
+  over 120s the XI goes out with the plain changes instead. Preview a match
+  without sending: `./venv/bin/python lineup_take.py <event_id> [--at <iso time>]`.
 
 ## One UI, two front doors
 
@@ -244,6 +250,7 @@ launchctl list | grep arsenal
 | `matchcentre.py` | ESPN match summary shaping (scorers, timeline, stats, line-ups) |
 | `export.py` | Writes `docs/data/` for Pages |
 | `live_alerts.py` | Telegram match alerts |
+| `lineup_take.py` | The Gooner take under the lineup alert (`config.LINEUP_TAKES`) |
 | `probe_feeds.py` | Empirical feed health checker |
 | `docs/` | The app (HTML, JS, CSS, service worker, data) |
 | `arsenal.db` | The data (created on first run) |

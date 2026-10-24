@@ -54,3 +54,323 @@ def test_later_goal_counts_earlier_ones_already_sent():
     state = live_alerts.matchcentre.live_state(data)
     (key, text), = live_alerts.build_alerts(BAYERN, data, state, {"ko", "ev0"})
     assert key == "ev1" and "Bayern Munich 1-1 Arsenal" in text and "All square" in text
+
+
+# ---- the lineup take (config.LINEUP_TAKES) ------------------------------------
+# Line-ups are the real ones: Bayern Munich 2-2 Arsenal on 2026-10-21, then
+# Arsenal v Everton on 2026-10-24, as ESPN published them.
+
+import json  # noqa: E402
+import os  # noqa: E402
+import subprocess  # noqa: E402
+from datetime import timedelta  # noqa: E402
+
+import pytest  # noqa: E402
+
+import config  # noqa: E402
+import db  # noqa: E402
+import lineup_take  # noqa: E402
+import matchcentre  # noqa: E402
+
+# id, name, ESPN pos, formation place
+ARS_EVERTON = [("196176", "David Raya", "G", 1), ("241077", "Ben White", "D", 2),
+               ("352758", "Myles Lewis-Skelly", "D", 3), ("231859", "Ezri Konsa", "D", 5),
+               ("236322", "Gabriel Magalhães", "D", 6), ("209581", "Mikel Merino", "M", 4),
+               ("293236", "Noni Madueke", "M", 7), ("238262", "Declan Rice", "M", 8),
+               ("203669", "Martin Ødegaard", "M", 10), ("251400", "Eberechi Eze", "M", 11),
+               ("258906", "Viktor Gyökeres", "F", 9)]
+ARS_EVERTON_BENCH = [("1", "Bruno Guimarães"), ("2", "Cristhian Mosquera"), ("3", "Kepa Arrizabalaga"),
+                     ("4", "Jurriën Timber"), ("5", "Kai Havertz"), ("6", "Piero Hincapié"),
+                     ("7", "Riccardo Calafiori"), ("8", "Max Dowman"), ("9", "Martín Zubimendi")]
+ARS_BAYERN = [("196176", "David Raya", "G", 1), ("4", "Jurriën Timber", "RB", 2),
+              ("7", "Riccardo Calafiori", "LB", 3), ("231859", "Ezri Konsa", "CD-R", 5),
+              ("236322", "Gabriel Magalhães", "CD-L", 6), ("1", "Bruno Guimarães", "CM", 4),
+              ("203669", "Martin Ødegaard", "RM", 7), ("238262", "Declan Rice", "LM", 8),
+              ("5", "Kai Havertz", "F", 9), ("10", "Bukayo Saka", "RF", 10),
+              ("293236", "Noni Madueke", "LF", 11)]
+EVERTON_XI = [("159443", "Jordan Pickford", "G", 1), ("311963", "Merlin Röhl", "D", 2),
+              ("262594", "Vitaliy Mykolenko", "D", 3), ("283586", "Jake O'Brien", "D", 5),
+              ("155226", "James Tarkowski", "D", 6), ("276220", "James Garner", "M", 4),
+              ("291307", "Brennan Johnson", "M", 7), ("378458", "Harrison Armstrong", "M", 8),
+              ("252389", "Kiernan Dewsbury-Hall", "M", 10), ("368864", "Tyrique George", "M", 11),
+              ("301166", "Thierno Barry", "F", 9)]
+
+
+def _short(name):
+    first, _, rest = name.partition(" ")
+    return f"{first[0]}. {rest}"
+
+
+def _roster(team_id, team, side, formation, xi, bench):
+    def athlete(pid, name):
+        return {"id": pid, "displayName": name, "shortName": _short(name)}
+    return {"team": {"id": team_id, "displayName": team}, "homeAway": side, "formation": formation,
+            "roster": [{"athlete": athlete(pid, n), "position": {"abbreviation": pos},
+                        "starter": True, "formationPlace": str(place)} for pid, n, pos, place in xi]
+                      + [{"athlete": athlete(pid, n), "position": {"abbreviation": "SUB"}, "starter": False}
+                         for pid, n in bench]}
+
+
+def _side(team, formation, xi, bench=()):
+    """A side as matchcentre._lineups shapes it."""
+    return next(s for s in matchcentre._lineups({"rosters": [_roster("1", team, "home", formation, xi, bench)]}))
+
+
+EVERTON_SUMMARY = {
+    "header": {"competitions": [{
+        "competitors": [
+            {"id": "359", "homeAway": "home", "score": "0", "team": {"displayName": "Arsenal"}},
+            {"id": "368", "homeAway": "away", "score": "0", "team": {"displayName": "Everton"}}],
+        "status": {"clock": 0.0, "displayClock": "0'", "period": 0,
+                   "type": {"name": "STATUS_SCHEDULED", "state": "pre", "completed": False,
+                            "shortDetail": "Sat 24 Oct 14:00"}}}]},
+    "keyEvents": [],
+    "rosters": [_roster("359", "Arsenal", "home", "4-2-3-1", ARS_EVERTON, ARS_EVERTON_BENCH),
+                _roster("368", "Everton", "away", "4-2-3-1", EVERTON_XI, [("20", "Mark Travers")])],
+}
+
+# What the lineup alert says today, pinned from the code before the take existed
+# (live_alerts.py at bb75bdc). With the flag off it must not move a byte.
+TODAYS_LINEUP = (
+    "👕 XI's out. 4-2-3-1 against Everton:\n\n"
+    "D. Raya, B. White, M. Lewis-Skelly, E. Konsa, G. Magalhães, M. Merino, N. Madueke, "
+    "D. Rice, M. Ødegaard, E. Eze, V. Gyökeres\n\n"
+    "Bench: B. Guimarães, C. Mosquera, K. Arrizabalaga, J. Timber, K. Havertz, P. Hincapié, "
+    "R. Calafiori, M. Dowman, M. Zubimendi")
+
+BAYERN_RESULT = {"id": "401915312", "kickoff": "2026-10-21T19:00:00+00:00", "finished": True,
+                 "home": "Bayern Munich", "away": "Arsenal", "opponent": "Bayern Munich",
+                 "home_goals": 2, "away_goals": 2, "league": "uefa.champions"}
+
+CHANGES = ("5 changes from the 2-2 at Bayern Munich:\n"
+           "In: White, Lewis-Skelly, Merino, Eze, Gyökeres\n"
+           "Out: Timber (bench), Calafiori (bench), Guimarães (bench), Havertz (bench), "
+           "Saka (not in the squad)\n"
+           "Shape: 4-3-3 last time, 4-2-3-1 today.")
+
+
+def test_changes_from_the_last_game():
+    today = _side("Arsenal", "4-2-3-1", ARS_EVERTON, ARS_EVERTON_BENCH)
+    bayern = _side("Arsenal", "4-3-3", ARS_BAYERN)
+    ch = lineup_take.changes(today, bayern)
+    assert [p["name"] for p in ch["in"]] == ["Ben White", "Myles Lewis-Skelly", "Mikel Merino",
+                                             "Eberechi Eze", "Viktor Gyökeres"]
+    assert [(p["name"], why) for p, why in ch["out"]] == [
+        ("Jurriën Timber", "bench"), ("Riccardo Calafiori", "bench"), ("Bruno Guimarães", "bench"),
+        ("Kai Havertz", "bench"), ("Bukayo Saka", "not in the squad")]
+    assert lineup_take.changes_text(ch, BAYERN_RESULT) == CHANGES
+
+
+def test_same_xi_says_so():
+    today = _side("Arsenal", "4-3-3", ARS_BAYERN)
+    text = lineup_take.changes_text(lineup_take.changes(today, today), BAYERN_RESULT)
+    assert text == "Same XI as the 2-2 at Bayern Munich."
+
+
+def test_full_backs_are_named_even_when_espn_only_says_d():
+    """Pre-match ESPN calls every defender D; the take needs to know who the full-backs are."""
+    line = lineup_take._xi_line(_side("Arsenal", "4-2-3-1", ARS_EVERTON))
+    assert "Ben White (RB)" in line and "Myles Lewis-Skelly (LB)" in line
+    assert "Ezri Konsa (CD-R)" in line and "Mikel Merino (M)" in line
+
+
+def test_opponent_form_skips_friendlies_and_anything_after_kickoff(monkeypatch):
+    from test_matchday import _sched_event
+    everton = ("368", "Everton", "EVE")
+    events = [
+        _sched_event("1", "2026-08-15T14:00Z", everton, ("166", "Lille", "LIL"), ("1", "1"), league="club.friendly"),
+        _sched_event("2", "2026-10-11T13:00Z", ("999", "Hull City", "HUL"), everton, ("2", "2")),
+        _sched_event("3", "2026-10-17T11:30Z", everton, ("363", "Chelsea", "CHE"), ("0", "2")),
+        _sched_event("4", "2026-10-24T14:00Z", ("359", "Arsenal", "ARS"), everton, None, state="pre", completed=False),
+    ]
+    for e in events:
+        e["league"]["abbreviation"] = "Premier League"
+    monkeypatch.setattr(lineup_take.fixtures, "_get", lambda url, params=None: {"events": events})
+    form = lineup_take.opponent_form("368", datetime(2026, 10, 24, 14, 0, tzinfo=timezone.utc))
+    assert form == ["Sun 11 Oct, Premier League: Hull City 2-2 Everton (drew)",
+                    "Sat 17 Oct, Premier League: Everton 0-2 Chelsea (lost)"]
+
+
+# ---- Claude failing, and the fallback ------------------------------------------
+
+class FakeClaude:
+    """Stands in for the claude CLI process: no real call in tests."""
+    calls = []
+
+    def __init__(self, stdout="", returncode=0, hang=False):
+        self.stdout, self.returncode, self.hang, self.pid = stdout, returncode, hang, 4242
+
+    def __call__(self, cmd, **kw):
+        FakeClaude.calls.append((cmd, kw))
+        return self
+
+    def communicate(self, text=None, timeout=None):
+        if self.hang and timeout:
+            raise subprocess.TimeoutExpired("claude", timeout)
+        return self.stdout, ""
+
+
+def _reply(result, is_error=False):
+    return json.dumps({"type": "result", "is_error": is_error, "result": result})
+
+
+@pytest.fixture
+def facts(monkeypatch):
+    today = _side("Arsenal", "4-2-3-1", ARS_EVERTON, ARS_EVERTON_BENCH)
+    bayern = _side("Arsenal", "4-3-3", ARS_BAYERN)
+    found = {"ours": today, "theirs": None, "prev": BAYERN_RESULT, "prev_ours": bayern,
+             "changes": lineup_take.changes(today, bayern), "form": [], "news": []}
+    monkeypatch.setattr(lineup_take, "gather", lambda conn, event, data, now: found)
+    monkeypatch.setattr(lineup_take.db, "get_conn", _null_conn)
+    return found
+
+
+class _null_conn:
+    def __enter__(self):
+        return None
+
+    def __exit__(self, *a):
+        return False
+
+
+EVERTON = {"id": "401878768", "kickoff": "2026-10-24T14:00:00+00:00", "home": "Arsenal",
+           "away": "Everton", "opponent": "Everton", "opponent_name": "Everton", "league": "eng.1"}
+
+
+@pytest.mark.parametrize("claude", [
+    FakeClaude(hang=True),                          # slower than CLAUDE_TIMEOUT
+    FakeClaude(stdout="", returncode=1),            # crashed
+    FakeClaude(stdout="Not logged in · Please run /login", returncode=1),
+    FakeClaude(stdout=_reply("API Error: 529", is_error=True)),
+    FakeClaude(stdout=_reply("   ")),               # empty take
+    FakeClaude(stdout=_reply("blah " * 1000)),      # a ramble
+], ids=["timeout", "crash", "logged-out", "api-error", "empty", "ramble"])
+def test_claude_failure_sends_the_xi_with_the_plain_changes(monkeypatch, facts, claude):
+    killed = []
+    monkeypatch.setattr(lineup_take.subprocess, "Popen", claude)
+    monkeypatch.setattr(lineup_take.os, "killpg", lambda pid, sig: killed.append(pid))
+    text = lineup_take.message(EVERTON, EVERTON_SUMMARY, TODAYS_LINEUP)
+    assert text == f"{TODAYS_LINEUP}\n\n{CHANGES}"
+    assert killed == ([4242] if claude.hang else [])
+
+
+def test_the_timeout_is_two_minutes_and_claude_runs_bare(monkeypatch, facts):
+    FakeClaude.calls = []
+    monkeypatch.setattr(lineup_take.subprocess, "Popen", FakeClaude(hang=True))
+    monkeypatch.setattr(lineup_take.os, "killpg", lambda pid, sig: None)
+    seen = {}
+    real = FakeClaude.communicate
+
+    def spy(self, text=None, timeout=None):
+        seen.setdefault("timeout", timeout)
+        return real(self, text, timeout)
+    monkeypatch.setattr(FakeClaude, "communicate", spy)
+    lineup_take.message(EVERTON, EVERTON_SUMMARY, TODAYS_LINEUP)
+    (cmd, kw), = FakeClaude.calls
+    assert seen["timeout"] == 120
+    assert cmd[0] == config.CLAUDE_BIN and os.path.isabs(cmd[0])
+    assert {"-p", "--setting-sources=project", "--tools=", "--strict-mcp-config"} <= set(cmd)
+    assert cmd[cmd.index("--model") + 1] == "opus"
+    assert kw["env"]["USER"] and kw["start_new_session"]
+
+
+def test_a_good_take_rides_under_the_xi_with_no_bold_or_em_dashes(monkeypatch, facts):
+    take = "Five changes and I rate it 🔴⚪\n- **Gyökeres** up top \u2014 right call.\nI'm calling 2-0."
+    monkeypatch.setattr(lineup_take.subprocess, "Popen", FakeClaude(stdout=_reply(take)))
+    text = lineup_take.message(EVERTON, EVERTON_SUMMARY, TODAYS_LINEUP)
+    assert text == (f"{TODAYS_LINEUP}\n\nFive changes and I rate it 🔴⚪\n"
+                    "- Gyökeres up top, right call.\nI'm calling 2-0.")
+
+
+# ---- the live path: flag off is today, flag on never doubles up ----------------
+
+
+@pytest.fixture
+def run(monkeypatch, tmp_path):
+    """live_alerts.main() against a scratch database, ESPN and Telegram stubbed."""
+    monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "t.db"))
+    db.init_db()
+    event = dict(EVERTON, kickoff=(datetime.now(timezone.utc) + timedelta(minutes=50)).isoformat())
+    with db.get_conn() as conn:
+        db.kv_set(conn, "football", json.dumps({"fixtures": [event], "results": [], "live_match": None}),
+                  datetime.now(timezone.utc).isoformat())
+    sent, spawned = [], []
+    monkeypatch.setattr(live_alerts.matchcentre, "_get", lambda url, params=None: EVERTON_SUMMARY)
+    monkeypatch.setattr(live_alerts, "notify", sent.append)
+    monkeypatch.setattr(live_alerts, "_refresh_snapshot", lambda: None)
+    monkeypatch.setattr(live_alerts, "_spawn_take", lambda e, d, plain: spawned.append(plain) or True)
+
+    def go():
+        live_alerts.main()
+        return sent, spawned
+    go.event = event
+    return go
+
+
+def _take_state(event):
+    with db.get_conn() as conn:
+        row = db.kv_get(conn, f"lineup_take:{event['id']}")
+    return row and row["value"]
+
+
+def test_flag_off_sends_todays_exact_lineup(monkeypatch, run):
+    monkeypatch.setattr(config, "LINEUP_TAKES", False)
+    sent, spawned = run()
+    assert sent == [TODAYS_LINEUP] and spawned == []
+    assert _take_state(run.event) is None
+    sent, spawned = run()
+    assert sent == [TODAYS_LINEUP]                  # and only once
+
+
+def test_flag_on_hands_the_lineup_to_one_worker_however_often_it_runs(monkeypatch, run):
+    monkeypatch.setattr(config, "LINEUP_TAKES", True)
+    sent, spawned = run()
+    run()
+    run()
+    assert spawned == [TODAYS_LINEUP] and sent == []
+    assert _take_state(run.event) == "pending"
+    # a run that overlapped and read the alert list before the claim landed
+    with db.get_conn() as conn:
+        rest = live_alerts.take_over_lineup(conn, run.event, EVERTON_SUMMARY,
+                                            [("lineup", TODAYS_LINEUP), ("ko", "kick off")], set())
+    assert rest == [("ko", "kick off")] and spawned == [TODAYS_LINEUP]
+
+
+def _job(tmp_path, event):
+    path = tmp_path / "job.json"
+    path.write_text(json.dumps({"event": event, "data": EVERTON_SUMMARY, "plain": TODAYS_LINEUP}))
+    return str(path)
+
+
+def test_the_worker_sends_once_and_a_late_rescue_does_not_repeat_it(monkeypatch, run, tmp_path):
+    monkeypatch.setattr(config, "LINEUP_TAKES", True)
+    sent, _ = run()
+    monkeypatch.setattr(live_alerts.lineup_take, "message", lambda e, d, plain: plain + "\n\nTAKE")
+    live_alerts.deliver_lineup(_job(tmp_path, run.event))
+    live_alerts.deliver_lineup(_job(tmp_path, run.event))
+    monkeypatch.setattr(live_alerts, "TAKE_RESCUE_AFTER", timedelta(0))
+    run()
+    assert sent == [TODAYS_LINEUP + "\n\nTAKE"] and _take_state(run.event) == "sent"
+
+
+def test_a_dead_worker_is_rescued_with_the_plain_xi_exactly_once(monkeypatch, run, tmp_path):
+    monkeypatch.setattr(config, "LINEUP_TAKES", True)
+    sent, _ = run()
+    run()
+    assert sent == []                               # the worker still has time
+    monkeypatch.setattr(live_alerts, "TAKE_RESCUE_AFTER", timedelta(0))
+    run()
+    run()
+    assert sent == [TODAYS_LINEUP]
+    # the worker wakes up after all: it must not send a second lineup
+    monkeypatch.setattr(live_alerts.lineup_take, "message", lambda e, d, plain: plain + "\n\nTAKE")
+    live_alerts.deliver_lineup(_job(tmp_path, run.event))
+    assert sent == [TODAYS_LINEUP]
+
+
+def test_a_worker_that_cannot_start_sends_the_plain_xi_at_once(monkeypatch, run):
+    monkeypatch.setattr(config, "LINEUP_TAKES", True)
+    monkeypatch.setattr(live_alerts, "_spawn_take", lambda e, d, plain: False)
+    sent, _ = run()
+    run()
+    assert sent == [TODAYS_LINEUP] and _take_state(run.event) == "sent"
