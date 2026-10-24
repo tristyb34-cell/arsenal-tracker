@@ -11,6 +11,7 @@ Preview a match without sending anything:
     ./venv/bin/python lineup_take.py <event_id> [--at 2026-10-24T13:02:00+00:00]
 """
 
+import html
 import json
 import os
 import pwd
@@ -240,8 +241,9 @@ def prompt(event, facts):
 
 
 def clean(text):
-    """Telegram alerts go out as plain text, so ** would show as asterisks; and
-    no em dashes, whatever the model does."""
+    """The take as Telegram HTML: escaped, its **bold** turned into <b>, any
+    stray ** dropped; and no em dashes, whatever the model does."""
+    text = re.sub(r"\*\*([^*\n]+?)\*\*", r"<b>\1</b>", html.escape(text, quote=False))
     text = re.sub(r"[ \t]*\u2014[ \t]*", ", ", text.replace("**", ""))
     return re.sub(r"[ \t]+\u2013[ \t]+", ", ", text).strip()
 
@@ -293,7 +295,7 @@ def message(event, data, plain, now=None):
     if take:
         return f"{plain}\n\n{take}"
     if facts["changes"]:
-        return f"{plain}\n\n{changes_text(facts['changes'], facts['prev'])}"
+        return f"{plain}\n\n{html.escape(changes_text(facts['changes'], facts['prev']), quote=False)}"
     return plain
 
 

@@ -19,11 +19,17 @@ With config.LINEUP_TAKES on, the lineup alert also carries a Gooner take
 (lineup_take.py). Claude can take two minutes and launchd never starts a run
 while the last one is still going, so the take is written by a detached worker
 (`live_alerts.py --lineup-take <job>`) and this run carries on with the goals.
+
+Alerts go out as Telegram HTML so the take's bold renders: every alert is
+escaped as it is built, and send() falls back to plain text if Telegram
+refuses the markup.
 """
 
+import html
 import json
 import os
 import random
+import re
 import subprocess
 import sys
 import tempfile
@@ -36,7 +42,7 @@ import db  # noqa: E402
 import fixtures  # noqa: E402
 import lineup_take  # noqa: E402
 import matchcentre  # noqa: E402
-from telegram_notify import notify  # noqa: E402
+from telegram_notify import MarkupRejected, notify  # noqa: E402
 
 TEAM = "Arsenal"
 WINDOW_BEFORE = timedelta(minutes=75)   # covers the lineup drop
@@ -153,7 +159,7 @@ def build_alerts(event, data, state, seen):
     ars = matchcentre.arsenal_side(matchcentre._lineups(data))
     if ars and ars["published"] and "lineup" not in seen:
         xi = ", ".join(p["short"] or p["name"] for row in ars["rows"] for p in row)
-        bench = ", ".join(p["short"] or p["name"] for p in ars["bench"][:9])
+        bench = ", ".join(p["short"] or p["name"] for p in ars["bench"])
         out.append(("lineup", f"{_line(event, 'lineup', 'lineup', formation=ars['formation'], opp=opp)}\n\n"
                               f"{xi}\n\nBench: {bench}"))
 
@@ -198,7 +204,24 @@ def build_alerts(event, data, state, seen):
                     text += "\nNorth London is RED 🔴⚪"
             out.append(("ft", text))
 
-    return out
+    # The templates carry no markup, so escaping the finished text escapes
+    # every name in it: Telegram HTML only needs &, < and > replaced.
+    return [(key, html.escape(text, quote=False)) for key, text in out]
+
+
+def plain_text(text):
+    """An alert as plain text: our only tags are <b>, and the rest is escaped."""
+    return html.unescape(re.sub(r"</?b>", "", text))
+
+
+def send(text):
+    """Send one alert as HTML. If Telegram cannot parse it, the same alert goes
+    again at once as plain text, so a stray character never costs an alert."""
+    try:
+        notify(text, parse_mode="HTML")
+    except MarkupRejected as e:
+        print(f"Telegram refused the HTML, resending plain: {e}")
+        notify(plain_text(text))
 
 
 def _take_key(event):
@@ -228,7 +251,7 @@ def _send_claimed(conn, key, text):
     if not _move(conn, key, "pending", "sending"):
         return False
     try:
-        notify(text)
+        send(text)
     except Exception:
         _move(conn, key, "sending", "pending")
         raise
@@ -326,7 +349,7 @@ def main():
         if config.LINEUP_TAKES:
             alerts = take_over_lineup(conn, event, data, alerts, seen)
         for key, text in alerts:
-            notify(text)
+            send(text)
             seen.add(key)
         if alerts:
             remember(conn, event["id"], seen)

@@ -57,9 +57,9 @@ ORBIT_MIN_MENTIONS = 2      # a one-off mention isn't a link
 # fast and each rebuild makes several ESPN requests, so let the cache ride.
 FIXTURES_MAX_AGE_MINUTES = 90
 # The lineup alert's Gooner take (lineup_take.py): changes from the last game,
-# our shape, the opponent, a prediction. Off until Tristan approves a sample.
-# Off, the lineup alert is exactly the plain XI and bench it has always been.
-LINEUP_TAKES = False
+# our shape, the opponent, a prediction. Live since 2026-10-24 (Tristan's go).
+# Off, the lineup alert is just the XI and bench.
+LINEUP_TAKES = True
 
 # credibility weights: "insider" > "high" > "medium" > "low"
 SOURCES = [

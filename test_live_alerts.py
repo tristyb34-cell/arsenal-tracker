@@ -274,15 +274,34 @@ def test_the_timeout_is_two_minutes_and_claude_runs_bare(monkeypatch, facts):
     assert kw["env"]["USER"] and kw["start_new_session"]
 
 
-def test_a_good_take_rides_under_the_xi_with_no_bold_or_em_dashes(monkeypatch, facts):
+def test_a_good_take_rides_under_the_xi_in_bold_html_with_no_em_dashes(monkeypatch, facts):
     take = "Five changes and I rate it 🔴⚪\n- **Gyökeres** up top \u2014 right call.\nI'm calling 2-0."
     monkeypatch.setattr(lineup_take.subprocess, "Popen", FakeClaude(stdout=_reply(take)))
     text = lineup_take.message(EVERTON, EVERTON_SUMMARY, TODAYS_LINEUP)
     assert text == (f"{TODAYS_LINEUP}\n\nFive changes and I rate it 🔴⚪\n"
-                    "- Gyökeres up top, right call.\nI'm calling 2-0.")
+                    "- <b>Gyökeres</b> up top, right call.\nI'm calling 2-0.")
+
+
+@pytest.mark.parametrize("raw, out", [
+    ("**Gyökeres** up top", "<b>Gyökeres</b> up top"),
+    ("**Saka** and **Rice**", "<b>Saka</b> and <b>Rice</b>"),
+    ("Rice & **O'Brien** <3 >_<", "Rice &amp; <b>O'Brien</b> &lt;3 &gt;_&lt;"),
+    ("an unclosed **bold", "an unclosed bold"),
+])
+def test_the_takes_bold_becomes_html_and_everything_else_is_escaped(raw, out):
+    assert lineup_take.clean(raw) == out
 
 
 # ---- the live path: flag off is today, flag on never doubles up ----------------
+
+
+def _seed(event):
+    """Put `event` in the cached snapshot, kicking off in 50 minutes."""
+    event = dict(event, kickoff=(datetime.now(timezone.utc) + timedelta(minutes=50)).isoformat())
+    with db.get_conn() as conn:
+        db.kv_set(conn, "football", json.dumps({"fixtures": [event], "results": [], "live_match": None}),
+                  datetime.now(timezone.utc).isoformat())
+    return event
 
 
 @pytest.fixture
@@ -290,17 +309,14 @@ def run(monkeypatch, tmp_path):
     """live_alerts.main() against a scratch database, ESPN and Telegram stubbed."""
     monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "t.db"))
     db.init_db()
-    event = dict(EVERTON, kickoff=(datetime.now(timezone.utc) + timedelta(minutes=50)).isoformat())
-    with db.get_conn() as conn:
-        db.kv_set(conn, "football", json.dumps({"fixtures": [event], "results": [], "live_match": None}),
-                  datetime.now(timezone.utc).isoformat())
+    event = _seed(EVERTON)
     sent, spawned = [], []
-    monkeypatch.setattr(live_alerts.matchcentre, "_get", lambda url, params=None: EVERTON_SUMMARY)
-    monkeypatch.setattr(live_alerts, "notify", sent.append)
+    monkeypatch.setattr(live_alerts, "notify", lambda text, **kw: sent.append(text))
     monkeypatch.setattr(live_alerts, "_refresh_snapshot", lambda: None)
     monkeypatch.setattr(live_alerts, "_spawn_take", lambda e, d, plain: spawned.append(plain) or True)
 
-    def go():
+    def go(summary=EVERTON_SUMMARY):
+        monkeypatch.setattr(live_alerts.matchcentre, "_get", lambda url, params=None: summary)
         live_alerts.main()
         return sent, spawned
     go.event = event
@@ -374,3 +390,160 @@ def test_a_worker_that_cannot_start_sends_the_plain_xi_at_once(monkeypatch, run)
     sent, _ = run()
     run()
     assert sent == [TODAYS_LINEUP] and _take_state(run.event) == "sent"
+
+
+def test_the_lineup_take_is_live():
+    assert config.LINEUP_TAKES is True
+
+
+# ---- the whole bench, and Telegram HTML -----------------------------------------
+
+import re  # noqa: E402
+
+import requests  # noqa: E402
+import telegram_notify  # noqa: E402
+
+# ESPN's ten subs for Bayern Munich 2-2 Arsenal. The old [:9] cut Gyökeres, the last.
+BAYERN_BENCH = [("8", "Max Dowman"), ("2", "Cristhian Mosquera"), ("241077", "Ben White"),
+                ("9", "Martín Zubimendi"), ("3", "Kepa Arrizabalaga"), ("251400", "Eberechi Eze"),
+                ("209581", "Mikel Merino"), ("352758", "Myles Lewis-Skelly"), ("11", "Illan Meslier"),
+                ("258906", "Viktor Gyökeres")]
+
+
+def test_the_whole_bench_goes_out_even_past_nine():
+    data = {"rosters": [_roster("359", "Arsenal", "away", "4-3-3", ARS_BAYERN, BAYERN_BENCH)]}
+    (key, text), = live_alerts.build_alerts(BAYERN, data, None, set())
+    assert key == "lineup"
+    assert text.endswith("Bench: M. Dowman, C. Mosquera, B. White, M. Zubimendi, K. Arrizabalaga, "
+                         "E. Eze, M. Merino, M. Lewis-Skelly, I. Meslier, V. Gyökeres")
+
+
+# Brighton & Hove Albion is ESPN's real name for them, and the & breaks Telegram HTML
+# unless escaped. The other names are made awkward on purpose.
+BRIGHTON = {"id": "402", "home": "Arsenal", "away": "Brighton & Hove Albion",
+            "opponent": "Brighton & Hove Albion", "league": "eng.1"}
+ODD_BENCH = [("31", "Jake O'Brien"), ("32", "Smith & Jones"), ("33", "Lee <Jr>")]
+
+
+def _brighton(name, state, completed=False, events=()):
+    return {
+        "header": {"competitions": [{
+            "competitors": [
+                {"id": "359", "homeAway": "home", "score": "1", "team": {"displayName": "Arsenal"}},
+                {"id": "331", "homeAway": "away", "score": "1", "team": {"displayName": "Brighton & Hove Albion"}}],
+            "status": {"clock": 1500.0, "displayClock": "25'", "period": 1,
+                       "type": {"name": name, "state": state, "completed": completed, "shortDetail": "x"}}}]},
+        "keyEvents": list(events),
+        "rosters": [_roster("359", "Arsenal", "home", "4-2-3-1", ARS_EVERTON, ODD_BENCH)],
+    }
+
+
+GOALS_AND_RED = [
+    _key("Goal", "12'", 720, 1, "359", "Arsenal", ["Martin Ødegaard", "Declan Rice"], scoring=True),
+    _key("Goal", "20'", 1200, 1, "331", "Brighton & Hove Albion", ["Jake O'Brien"], scoring=True),
+    _key("Red Card", "24'", 1440, 1, "331", "Brighton & Hove Albion", ["Lewis <Dunk>"]),
+]
+# lineup; then kick-off, two goals and a red; half time; full time
+STAGES = [_brighton("STATUS_SCHEDULED", "pre"),
+          _brighton("STATUS_FIRST_HALF", "in", events=GOALS_AND_RED),
+          _brighton("STATUS_HALFTIME", "in", events=GOALS_AND_RED),
+          _brighton("STATUS_FULL_TIME", "post", completed=True, events=GOALS_AND_RED)]
+
+
+def _is_clean_html(text):
+    """No bare &, < or > outside our <b> tags."""
+    bare = re.sub(r"</?b>", "", text)
+    return "<" not in bare and ">" not in bare and not re.search(r"&(?!amp;|lt;|gt;)", bare)
+
+
+def test_awkward_names_are_escaped_and_come_back_whole_as_plain_text():
+    (_, text), = live_alerts.build_alerts(BRIGHTON, STAGES[0], None, set())
+    assert "M. Ødegaard" in text and "J. O'Brien" in text
+    assert "S. &amp; Jones" in text and "L. &lt;Jr&gt;" in text and "Brighton &amp; Hove Albion" in text
+    assert _is_clean_html(text)
+    plain = live_alerts.plain_text(text)
+    assert "S. & Jones" in plain and "L. <Jr>" in plain and "Brighton & Hove Albion" in plain
+    assert live_alerts.plain_text("- <b>Saka</b> &amp; <b>O'Brien</b> &lt;3") == "- Saka & O'Brien <3"
+
+
+class _Response:
+    def __init__(self, status):
+        self.status_code = status
+        self.text = ('{"ok":false,"error_code":400,"description":"Bad Request: can\'t parse entities"}'
+                     if status == 400 else '{"ok":true}')
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise requests.HTTPError(self.text)
+
+
+class FakeTelegram:
+    """Stands in for api.telegram.org; with reject on, every HTML message gets the 400."""
+
+    def __init__(self, reject):
+        self.reject, self.posts = reject, []
+
+    def __call__(self, url, data=None, timeout=None):
+        self.posts.append(dict(data))
+        return _Response(400 if self.reject and data.get("parse_mode") else 200)
+
+
+@pytest.fixture
+def telegram(monkeypatch, tmp_path):
+    """The real notify() with only the HTTP call stubbed: nothing leaves the machine."""
+    cfg = tmp_path / "bridge.json"
+    cfg.write_text(json.dumps({"token": "t", "chat_id": "1", "chat_log": str(tmp_path / "chat.jsonl")}))
+    monkeypatch.setattr(telegram_notify, "CONFIG_PATH", cfg)
+    monkeypatch.setattr(telegram_notify.time, "sleep", lambda s: pytest.fail("a refused message was retried"))
+
+    def make(reject):
+        fake = FakeTelegram(reject)
+        monkeypatch.setattr(telegram_notify.requests, "post", fake)
+        monkeypatch.setattr(live_alerts, "notify", telegram_notify.notify)
+        return fake
+    return make
+
+
+def _match_day(monkeypatch, run):
+    monkeypatch.setattr(config, "LINEUP_TAKES", False)
+    _seed(BRIGHTON)
+    for summary in STAGES:
+        run(summary)
+
+
+def test_every_alert_type_goes_out_as_html(monkeypatch, run, telegram):
+    tg = telegram(reject=False)
+    _match_day(monkeypatch, run)
+    assert len(tg.posts) == 7                       # lineup, ko, 2 goals, red, ht, ft
+    assert all(p["parse_mode"] == "HTML" and _is_clean_html(p["text"]) for p in tg.posts)
+
+
+def test_every_alert_type_is_resent_as_plain_text_when_telegram_refuses_the_html(monkeypatch, run, telegram):
+    tg = telegram(reject=True)
+    _match_day(monkeypatch, run)
+    tried, resent = tg.posts[0::2], tg.posts[1::2]
+    assert len(tried) == len(resent) == 7
+    assert all(p["parse_mode"] == "HTML" for p in tried) and not any("parse_mode" in p for p in resent)
+    assert [p["text"] for p in resent] == [live_alerts.plain_text(p["text"]) for p in tried]
+    lineup, ko, ours, theirs, red, ht, ft = (p["text"] for p in resent)
+    assert lineup.endswith("Bench: J. O'Brien, S. & Jones, L. <Jr>") and "M. Ødegaard" in lineup
+    assert "Martin Ødegaard" in ours and "Lovely ball from Declan Rice." in ours
+    assert "Arsenal 1-0 Brighton & Hove Albion" in ours
+    assert "Jake O'Brien" in theirs and "Arsenal 1-1 Brighton & Hove Albion" in theirs
+    assert "Lewis <Dunk>" in red and ko.endswith("Arsenal v Brighton & Hove Albion")
+    assert ht.startswith("⏸") and ft.startswith("🤝")
+    # each alert went once and is recorded, so the next run sends nothing
+    run(STAGES[-1])
+    assert len(tg.posts) == 14
+
+
+def test_the_lineup_take_is_resent_as_plain_text_too(monkeypatch, run, telegram, tmp_path):
+    monkeypatch.setattr(config, "LINEUP_TAKES", True)
+    run()
+    tg = telegram(reject=True)
+    monkeypatch.setattr(live_alerts.lineup_take, "message",
+                        lambda e, d, plain: plain + "\n\n- <b>Gyökeres</b> up top &amp; Eze behind.")
+    live_alerts.deliver_lineup(_job(tmp_path, run.event))
+    assert [("parse_mode" in p) for p in tg.posts] == [True, False]
+    assert tg.posts[1]["text"] == TODAYS_LINEUP + "\n\n- Gyökeres up top & Eze behind."
+    assert _take_state(run.event) == "sent"
